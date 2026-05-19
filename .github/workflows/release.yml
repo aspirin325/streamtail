@@ -1,0 +1,111 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+jobs:
+  build-linux:
+    name: Build ${{ matrix.asset_suffix }}
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: registry.access.redhat.com/ubi8/ubi:latest
+            asset_suffix: x86_64-redhat-ubi8-linux-gnu
+          - image: oraclelinux:8
+            asset_suffix: x86_64-oraclelinux8-linux-gnu
+
+    steps:
+      - name: Validate release tag
+        shell: bash
+        run: |
+          if [[ ! "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tags must use SemVer format vMAJOR.MINOR.PATCH, for example v0.1.0."
+            exit 1
+          fi
+
+      - name: Install system packages
+        run: dnf -y install ca-certificates curl gcc git gzip tar
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        shell: bash
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup-init.sh
+          sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain stable
+          echo "${HOME}/.cargo/bin" >> "${GITHUB_PATH}"
+
+      - name: Build release binary
+        run: cargo build --locked --release --bin streamtail
+
+      - name: Package binary
+        shell: bash
+        run: |
+          mkdir -p dist
+          tar -C target/release -czf "dist/streamtail-${GITHUB_REF_NAME}-${{ matrix.asset_suffix }}.tar.gz" streamtail
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: dist/streamtail-${{ github.ref_name }}-${{ matrix.asset_suffix }}.spdx.json
+          upload-artifact: false
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          (
+            cd dist
+            sha256sum *.tar.gz *.spdx.json > "streamtail-${GITHUB_REF_NAME}-${{ matrix.asset_suffix }}.sha256"
+          )
+
+      - name: Attest build provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/*.tar.gz
+
+      - name: Attest SBOM
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/*.tar.gz
+          sbom-path: dist/streamtail-${{ github.ref_name }}-${{ matrix.asset_suffix }}.spdx.json
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: streamtail-${{ matrix.asset_suffix }}
+          path: dist/*
+
+  publish:
+    name: Publish GitHub release
+    runs-on: ubuntu-latest
+    needs: build-linux
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

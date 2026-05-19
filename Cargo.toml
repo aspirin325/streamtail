@@ -1,0 +1,13 @@
+[package]
+name = "streamtail"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.86"
+description = "A tail -f style CLI for following changing HTTP content."
+license = "MIT"
+repository = "https://github.com/aspirin325/streamtail"
+keywords = ["cli", "http", "tail", "streaming", "logs"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+ureq = { version = "2.12", default-features = true }
