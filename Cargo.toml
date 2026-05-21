@@ -6,8 +6,37 @@ rust-version = "1.86"
 description = "A tail -f style CLI for following changing HTTP content."
 license = "MIT"
 repository = "https://github.com/aspirin325/streamtail"
+readme = "README.md"
 keywords = ["cli", "http", "tail", "streaming", "logs"]
 categories = ["command-line-utilities"]
 
 [dependencies]
 ureq = { version = "2.12", default-features = true }
+
+[package.metadata.deb]
+maintainer = "aspirin325 <aspirin325@users.noreply.github.com>"
+copyright = "2026, aspirin325"
+license-file = ["LICENSE", "0"]
+depends = "$auto"
+section = "utils"
+priority = "optional"
+extended-description = """
+streamtail follows changing HTTP and HTTPS content from a terminal.
+It behaves like tail -f for URLs by polling a remote resource and printing
+only newly appended response content after the first snapshot.
+"""
+assets = [
+  ["target/release/streamtail", "usr/bin/", "755"],
+  ["README.md", "usr/share/doc/streamtail/README.md", "644"],
+  ["LICENSE", "usr/share/doc/streamtail/LICENSE", "644"],
+  ["docs/man/streamtail.1", "usr/share/man/man1/streamtail.1", "644"],
+]
+
+[package.metadata.generate-rpm]
+require-sh = false
+assets = [
+  { source = "target/release/streamtail", dest = "/usr/bin/streamtail", mode = "755" },
+  { source = "README.md", dest = "/usr/share/doc/streamtail/README.md", mode = "644" },
+  { source = "LICENSE", dest = "/usr/share/licenses/streamtail/LICENSE", mode = "644" },
+  { source = "docs/man/streamtail.1", dest = "/usr/share/man/man1/streamtail.1", mode = "644" },
+]

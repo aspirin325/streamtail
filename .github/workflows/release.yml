@@ -23,8 +23,16 @@ jobs:
         include:
           - image: registry.access.redhat.com/ubi8/ubi:latest
             asset_suffix: x86_64-redhat-ubi8-linux-gnu
+            package_type: rpm
           - image: oraclelinux:8
             asset_suffix: x86_64-oraclelinux8-linux-gnu
+            package_type: rpm
+          - image: debian:12
+            asset_suffix: x86_64-debian12-linux-gnu
+            package_type: deb
+          - image: ubuntu:24.04
+            asset_suffix: x86_64-ubuntu2404-linux-gnu
+            package_type: deb
 
     steps:
       - name: Validate release tag
@@ -36,7 +44,14 @@ jobs:
           fi
 
       - name: Install system packages
-        run: dnf -y install ca-certificates curl gcc git gzip tar
+        shell: bash
+        run: |
+          if command -v dnf >/dev/null 2>&1; then
+            dnf -y install binutils ca-certificates curl gcc git gzip tar
+          else
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y binutils ca-certificates curl gcc git gzip tar
+          fi
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -51,11 +66,34 @@ jobs:
       - name: Build release binary
         run: cargo build --locked --release --bin streamtail
 
+      - name: Strip release binary
+        run: strip -s target/release/streamtail
+
+      - name: Install package builder
+        shell: bash
+        run: |
+          case "${{ matrix.package_type }}" in
+            rpm)
+              cargo install --locked cargo-generate-rpm
+              ;;
+            deb)
+              cargo install --locked cargo-deb
+              ;;
+          esac
+
       - name: Package binary
         shell: bash
         run: |
           mkdir -p dist
           tar -C target/release -czf "dist/streamtail-${GITHUB_REF_NAME}-${{ matrix.asset_suffix }}.tar.gz" streamtail
+          case "${{ matrix.package_type }}" in
+            rpm)
+              cargo generate-rpm --output "dist/streamtail-${GITHUB_REF_NAME}-${{ matrix.asset_suffix }}.rpm"
+              ;;
+            deb)
+              cargo deb --no-build --no-strip --output "dist/streamtail-${GITHUB_REF_NAME}-${{ matrix.asset_suffix }}.deb"
+              ;;
+          esac
 
       - name: Generate SBOM
         uses: anchore/sbom-action@v0
@@ -70,18 +108,27 @@ jobs:
         run: |
           (
             cd dist
-            sha256sum *.tar.gz *.spdx.json > "streamtail-${GITHUB_REF_NAME}-${{ matrix.asset_suffix }}.sha256"
+            shopt -s nullglob
+            for artifact in *.tar.gz *.rpm *.deb *.spdx.json; do
+              sha256sum "${artifact}" > "${artifact}.sha256"
+            done
           )
 
       - name: Attest build provenance
         uses: actions/attest@v4
         with:
-          subject-path: dist/*.tar.gz
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.rpm
+            dist/*.deb
 
       - name: Attest SBOM
         uses: actions/attest@v4
         with:
-          subject-path: dist/*.tar.gz
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.rpm
+            dist/*.deb
           sbom-path: dist/streamtail-${{ github.ref_name }}-${{ matrix.asset_suffix }}.spdx.json
 
       - name: Upload binary artifact
