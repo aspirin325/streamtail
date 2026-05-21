@@ -22,6 +22,9 @@ are tracked as later roadmap phases in `docs/`.
 streamtail https://example.com/logs
 streamtail https://example.com/api/events --interval 2s
 streamtail https://example.com/logs --json
+streamtail https://example.com/logs --basic-auth user:pass
+streamtail https://example.com/logs --token "$STREAMTAIL_TOKEN"
+streamtail https://example.com/logs --debug --log streamtail.log
 ```
 
 Useful options:
@@ -33,6 +36,10 @@ Useful options:
                               Retry limit for consecutive retryable failures
     --once                    Fetch once and exit
     --json                    Emit each update as a JSON line
+    --debug                   Write debug logging; requires --log
+    --log <PATH>              Debug log output file
+    --basic-auth <USER:PASS>  Send HTTP Basic authentication
+    --token <TOKEN>           Send bearer token authentication
 ```
 
 ## Build on Linux

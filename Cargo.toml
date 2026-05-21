@@ -11,6 +11,7 @@ keywords = ["cli", "http", "tail", "streaming", "logs"]
 categories = ["command-line-utilities"]
 
 [dependencies]
+base64 = "0.22"
 ureq = { version = "2.12", default-features = true }
 
 [package.metadata.deb]
