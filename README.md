@@ -24,8 +24,11 @@ streamtail https://example.com/api/events --interval 2s
 streamtail https://example.com/logs --json
 streamtail https://example.com/logs --basic-auth user:pass
 streamtail https://example.com/logs --token "$STREAMTAIL_TOKEN"
+streamtail https://example.com/logs --token-env STREAMTAIL_TOKEN
+streamtail https://example.com/logs --netrc
 streamtail https://example.com/logs --debug --log streamtail.log
-streamtail https://example.com/logs --header "X-Env: prod" --output logs.txt
+streamtail https://example.com/logs -f --header "X-Env: prod" --output logs.txt
+streamtail https://example.com/logs --output logs.txt --append-output
 streamtail https://example.com/logs --exit-on-match "deploy complete"
 streamtail https://example.com/query --method POST --body '{"service":"api"}'
 streamtail https://internal.example/logs --ca-cert ./internal-ca.pem
@@ -37,13 +40,18 @@ Useful options:
     --method <METHOD>         HTTP method; defaults to GET, or POST with --body
     --body <TEXT>             Request body to send
     --header <NAME: VALUE>    Add an HTTP header; repeatable
+    --user-agent <VALUE>      Set the HTTP User-Agent header
+    --proxy <URL>             Send requests through an HTTP or HTTPS proxy
 -i, --interval <DURATION>     Poll interval, for example 500ms, 2s, 1m
     --timeout <DURATION>      HTTP timeout per request
     --max-retries <N|unlimited>
                               Retry limit for consecutive retryable failures
+    --retry-status <CODE>     Retry an additional HTTP status code; repeatable
     --once                    Fetch once and exit
+-f, --follow-from-end         Start after the first fetched snapshot
     --json                    Emit each update as a JSON line
     --output <PATH>           Write stream output to a file instead of stdout
+    --append-output           Append to --output instead of replacing it
     --exit-on-match <REGEX>   Exit after emitted output matches a regex
     --max-events <N>          Exit after emitting N updates
     --max-duration <DURATION> Exit after the total runtime duration
@@ -53,6 +61,9 @@ Useful options:
     --insecure                Disable TLS certificate verification
     --basic-auth <USER:PASS>  Send HTTP Basic authentication
     --token <TOKEN>           Send bearer token authentication
+    --token-file <PATH>       Read bearer token authentication from a file
+    --token-env <NAME>        Read bearer token authentication from an env var
+    --netrc                   Use matching credentials from ~/.netrc
 ```
 
 ## Build on Linux

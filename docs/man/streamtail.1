@@ -1,4 +1,4 @@
-.TH STREAMTAIL 1 "May 20, 2026" "streamtail 0.1.0" "User Commands"
+.TH STREAMTAIL 1 "May 21, 2026" "streamtail 0.1.0" "User Commands"
 .SH NAME
 streamtail \- follow changing HTTP content like tail -f for URLs
 .SH SYNOPSIS
@@ -28,6 +28,12 @@ Request body to send.
 .BR \-\-header " " \fINAME:VALUE\fR
 Add an HTTP header. This option may be repeated.
 .TP
+.BR \-\-user-agent " " \fIVALUE\fR
+Set the HTTP User-Agent header.
+.TP
+.BR \-\-proxy " " \fIURL\fR
+Send requests through an HTTP or HTTPS proxy.
+.TP
 .BR \-i ", " \-\-interval " " \fIDURATION\fR
 Polling interval. Durations support suffixes such as
 .BR ms ,
@@ -44,8 +50,16 @@ HTTP timeout per request. The default timeout is 10s.
 Maximum number of consecutive retryable failures before exiting. The default is
 .BR unlimited .
 .TP
+.BR \-\-retry-status " " \fICODE\fR
+Retry an additional HTTP status code. This option may be repeated.
+.TP
 .BR \-\-once
 Fetch once, print the initial body, and exit.
+.TP
+.BR \-f ", " \-\-follow-from-end
+Start after the first fetched snapshot. This behaves more like
+.BR tail " " \-f
+for endpoints that already contain historical content.
 .TP
 .BR \-\-json
 Emit each update as a JSON Lines record with a
@@ -54,6 +68,12 @@ field.
 .TP
 .BR \-\-output " " \fIPATH\fR
 Write stream output to a file instead of standard output.
+.TP
+.BR \-\-append-output
+Append stream output to the file selected with
+.BR \-\-output
+instead of replacing it. This option requires
+.BR \-\-output .
 .TP
 .BR \-\-exit-on-match " " \fIREGEX\fR
 Exit successfully after emitted output matches a regular expression.
@@ -87,6 +107,17 @@ Send HTTP Basic authentication credentials.
 .TP
 .BR \-\-token " " \fITOKEN\fR
 Send bearer token authentication in the Authorization header.
+.TP
+.BR \-\-token-file " " \fIPATH\fR
+Read bearer token authentication from a file. Leading and trailing whitespace is
+trimmed.
+.TP
+.BR \-\-token-env " " \fINAME\fR
+Read bearer token authentication from an environment variable.
+.TP
+.BR \-\-netrc
+Use matching Basic authentication credentials from
+.BR ~/.netrc .
 .TP
 .BR \-h ", " \-\-help
 Print command help.
@@ -123,11 +154,20 @@ Use Basic authentication:
 Use bearer token authentication:
 .B streamtail https://example.com/logs --token "$STREAMTAIL_TOKEN"
 .TP
+Use bearer token authentication from the environment:
+.B streamtail https://example.com/logs --token-env STREAMTAIL_TOKEN
+.TP
+Use matching .netrc credentials:
+.B streamtail https://example.com/logs --netrc
+.TP
 Write debug logs:
 .B streamtail https://example.com/logs --debug --log streamtail.log
 .TP
-Add a custom header and save output:
-.B streamtail https://example.com/logs --header "X-Env: prod" --output logs.txt
+Start from the current end and save output:
+.B streamtail https://example.com/logs -f --header "X-Env: prod" --output logs.txt
+.TP
+Append output to an existing file:
+.B streamtail https://example.com/logs --output logs.txt --append-output
 .TP
 Exit when output matches:
 .B streamtail https://example.com/logs --exit-on-match "deploy complete"
@@ -139,7 +179,8 @@ Use a custom CA certificate:
 .B streamtail https://internal.example/logs --ca-cert ./internal-ca.pem
 .SH NOTES
 HTTP 5xx responses and transport failures are retryable. HTTP 401 and 403
-responses are fatal.
+responses are fatal unless explicitly selected with
+.BR \-\-retry-status .
 .SH SEE ALSO
 .BR tail (1),
 .BR curl (1)

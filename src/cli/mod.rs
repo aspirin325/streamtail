@@ -11,15 +11,21 @@ pub struct Config {
     pub method: String,
     pub body: Option<String>,
     pub headers: Vec<HeaderConfig>,
+    pub user_agent: Option<String>,
+    pub proxy: Option<String>,
     pub interval: Duration,
     pub timeout: Duration,
     pub retry_limit: RetryLimit,
+    pub retry_statuses: Vec<u16>,
     pub once: bool,
+    pub follow_from_end: bool,
     pub json: bool,
     pub debug: bool,
     pub log_path: Option<PathBuf>,
     pub output_path: Option<PathBuf>,
+    pub append_output: bool,
     pub auth: Option<AuthConfig>,
+    pub netrc: bool,
     pub ca_cert_path: Option<PathBuf>,
     pub insecure: bool,
     pub exit_on_match: Option<String>,
@@ -31,6 +37,8 @@ pub struct Config {
 pub enum AuthConfig {
     Basic { username: String, password: String },
     BearerToken(String),
+    BearerTokenFile(PathBuf),
+    BearerTokenEnv(String),
 }
 
 impl AuthConfig {
@@ -38,6 +46,8 @@ impl AuthConfig {
         match self {
             Self::Basic { .. } => "basic",
             Self::BearerToken(_) => "bearer",
+            Self::BearerTokenFile(_) => "bearer-file",
+            Self::BearerTokenEnv(_) => "bearer-env",
         }
     }
 }
@@ -68,6 +78,7 @@ pub enum CliError {
     InvalidHeader(String),
     InvalidMethod(String),
     InvalidNumber(String),
+    InvalidStatusCode(String),
     ZeroDuration(String),
     MissingRequiredFlag { flag: String, required: String },
     ConflictingAuthFlags,
@@ -92,6 +103,9 @@ impl fmt::Display for CliError {
             }
             Self::InvalidMethod(value) => write!(formatter, "invalid HTTP method '{value}'"),
             Self::InvalidNumber(value) => write!(formatter, "invalid number '{value}'"),
+            Self::InvalidStatusCode(value) => {
+                write!(formatter, "invalid HTTP status code '{value}'")
+            }
             Self::ZeroDuration(flag) => write!(formatter, "{flag} must be greater than zero"),
             Self::MissingRequiredFlag { flag, required } => {
                 write!(formatter, "{flag} requires {required}")
@@ -99,7 +113,7 @@ impl fmt::Display for CliError {
             Self::ConflictingAuthFlags => {
                 write!(
                     formatter,
-                    "--basic-auth and --token cannot be used together"
+                    "only one authentication source can be used at a time"
                 )
             }
         }
@@ -118,15 +132,21 @@ where
     let mut method_was_set = false;
     let mut body = None;
     let mut headers = Vec::new();
+    let mut user_agent = None;
+    let mut proxy = None;
     let mut interval = DEFAULT_INTERVAL;
     let mut timeout = DEFAULT_TIMEOUT;
     let mut retry_limit = RetryLimit::Unlimited;
+    let mut retry_statuses = Vec::new();
     let mut once = false;
+    let mut follow_from_end = false;
     let mut json = false;
     let mut debug = false;
     let mut log_path = None;
     let mut output_path = None;
+    let mut append_output = false;
     let mut auth = None;
+    let mut netrc = false;
     let mut ca_cert_path = None;
     let mut insecure = false;
     let mut exit_on_match = None;
@@ -143,14 +163,21 @@ where
             }
             "--body" => body = Some(next_value(&mut args, &arg)?),
             "--header" => headers.push(parse_header(&next_value(&mut args, &arg)?)?),
+            "--user-agent" => user_agent = Some(next_value(&mut args, &arg)?),
+            "--proxy" => proxy = Some(next_value(&mut args, &arg)?),
             "-i" | "--interval" => interval = parse_flag_duration(&mut args, &arg)?,
             "--timeout" => timeout = parse_flag_duration(&mut args, &arg)?,
             "--max-retries" => retry_limit = parse_flag_retry_limit(&mut args, &arg)?,
+            "--retry-status" => {
+                retry_statuses.push(parse_status_code(&next_value(&mut args, &arg)?)?);
+            }
             "--once" => once = true,
+            "-f" | "--follow-from-end" => follow_from_end = true,
             "--json" => json = true,
             "--debug" => debug = true,
             "--log" => log_path = Some(PathBuf::from(next_value(&mut args, &arg)?)),
             "--output" => output_path = Some(PathBuf::from(next_value(&mut args, &arg)?)),
+            "--append-output" => append_output = true,
             "--ca-cert" => ca_cert_path = Some(PathBuf::from(next_value(&mut args, &arg)?)),
             "--insecure" => insecure = true,
             "--exit-on-match" => exit_on_match = Some(next_value(&mut args, &arg)?),
@@ -165,6 +192,19 @@ where
                     AuthConfig::BearerToken(next_value(&mut args, &arg)?),
                 )?;
             }
+            "--token-file" => {
+                set_auth(
+                    &mut auth,
+                    AuthConfig::BearerTokenFile(PathBuf::from(next_value(&mut args, &arg)?)),
+                )?;
+            }
+            "--token-env" => {
+                set_auth(
+                    &mut auth,
+                    AuthConfig::BearerTokenEnv(next_value(&mut args, &arg)?),
+                )?;
+            }
+            "--netrc" => netrc = true,
             _ if arg.starts_with('-') => return Err(CliError::UnknownFlag(arg)),
             _ if url.is_none() => url = Some(arg),
             _ => return Err(CliError::UnexpectedArgument(arg)),
@@ -182,6 +222,15 @@ where
             required: "--log <PATH>".to_owned(),
         });
     }
+    if append_output && output_path.is_none() {
+        return Err(CliError::MissingRequiredFlag {
+            flag: "--append-output".to_owned(),
+            required: "--output <PATH>".to_owned(),
+        });
+    }
+    if netrc && auth.is_some() {
+        return Err(CliError::ConflictingAuthFlags);
+    }
     if body.is_some() && !method_was_set {
         method = "POST".to_owned();
     }
@@ -193,15 +242,21 @@ where
         method,
         body,
         headers,
+        user_agent,
+        proxy,
         interval,
         timeout,
         retry_limit,
+        retry_statuses,
         once,
+        follow_from_end,
         json,
         debug,
         log_path,
         output_path,
+        append_output,
         auth,
+        netrc,
         ca_cert_path,
         insecure,
         exit_on_match,
@@ -224,13 +279,18 @@ OPTIONS:
         --method <METHOD>         HTTP method [default: GET, or POST with --body]
         --body <TEXT>             Request body to send
         --header <NAME: VALUE>    Add an HTTP header; repeatable
+        --user-agent <VALUE>      Set the HTTP User-Agent header
+        --proxy <URL>             Send requests through an HTTP or HTTPS proxy
     -i, --interval <DURATION>     Poll interval, for example 500ms, 2s, 1m
         --timeout <DURATION>      HTTP timeout per request [default: 10s]
         --max-retries <N|unlimited>
                                   Retry limit for consecutive retryable failures
+        --retry-status <CODE>     Retry an additional HTTP status code; repeatable
         --once                    Fetch once and exit
+    -f, --follow-from-end         Start after the first fetched snapshot
         --json                    Emit each update as a JSON line
         --output <PATH>           Write stream output to a file instead of stdout
+        --append-output           Append to --output instead of replacing it
         --exit-on-match <REGEX>   Exit after emitted output matches a regex
         --max-events <N>          Exit after emitting N updates
         --max-duration <DURATION> Exit after the total runtime duration
@@ -240,6 +300,9 @@ OPTIONS:
         --insecure                Disable TLS certificate verification
         --basic-auth <USER:PASS>  Send HTTP Basic authentication
         --token <TOKEN>           Send bearer token authentication
+        --token-file <PATH>       Read bearer token authentication from a file
+        --token-env <NAME>        Read bearer token authentication from an env var
+        --netrc                   Use matching credentials from ~/.netrc
     -h, --help                    Print help
     -V, --version                 Print version
 ",
@@ -277,6 +340,13 @@ fn parse_positive_u64(value: &str) -> Result<u64, CliError> {
     match value.parse::<u64>() {
         Ok(number) if number > 0 => Ok(number),
         _ => Err(CliError::InvalidNumber(value.to_owned())),
+    }
+}
+
+fn parse_status_code(value: &str) -> Result<u16, CliError> {
+    match value.parse::<u16>() {
+        Ok(status) if (100..=599).contains(&status) => Ok(status),
+        _ => Err(CliError::InvalidStatusCode(value.to_owned())),
     }
 }
 
@@ -407,13 +477,19 @@ mod tests {
                 assert_eq!(config.method, "GET");
                 assert_eq!(config.body, None);
                 assert_eq!(config.headers, Vec::new());
+                assert_eq!(config.user_agent, None);
+                assert_eq!(config.proxy, None);
                 assert_eq!(config.interval, DEFAULT_INTERVAL);
                 assert_eq!(config.timeout, DEFAULT_TIMEOUT);
                 assert_eq!(config.retry_limit, RetryLimit::Unlimited);
+                assert_eq!(config.retry_statuses, Vec::new());
+                assert!(!config.follow_from_end);
                 assert!(!config.debug);
                 assert_eq!(config.log_path, None);
                 assert_eq!(config.output_path, None);
+                assert!(!config.append_output);
                 assert_eq!(config.auth, None);
+                assert!(!config.netrc);
                 assert_eq!(config.ca_cert_path, None);
                 assert!(!config.insecure);
                 assert_eq!(config.exit_on_match, None);
@@ -449,10 +525,20 @@ mod tests {
             "Content-Type: application/json",
             "--header",
             "X-Env: test",
+            "--user-agent",
+            "streamtail-test/1.0",
+            "--proxy",
+            "http://proxy.local:8080",
+            "--retry-status",
+            "429",
+            "--retry-status",
+            "404",
             "--once",
+            "--follow-from-end",
             "--json",
             "--output",
             "streamtail.out",
+            "--append-output",
             "--exit-on-match",
             "ready",
             "--max-events",
@@ -486,14 +572,19 @@ mod tests {
                         }
                     ]
                 );
+                assert_eq!(config.user_agent, Some("streamtail-test/1.0".to_owned()));
+                assert_eq!(config.proxy, Some("http://proxy.local:8080".to_owned()));
                 assert_eq!(config.interval, Duration::from_secs(1));
                 assert_eq!(config.timeout, Duration::from_secs(5));
                 assert_eq!(config.retry_limit, RetryLimit::Limited(3));
+                assert_eq!(config.retry_statuses, vec![429, 404]);
                 assert!(config.once);
+                assert!(config.follow_from_end);
                 assert!(config.json);
                 assert!(config.debug);
                 assert_eq!(config.log_path, Some(PathBuf::from("streamtail.log")));
                 assert_eq!(config.output_path, Some(PathBuf::from("streamtail.out")));
+                assert!(config.append_output);
                 assert_eq!(config.ca_cert_path, Some(PathBuf::from("ca.pem")));
                 assert!(config.insecure);
                 assert_eq!(config.exit_on_match, Some("ready".to_owned()));
@@ -539,6 +630,14 @@ mod tests {
     }
 
     #[test]
+    fn rejects_invalid_retry_status() {
+        assert_eq!(
+            parse(&["--retry-status", "99", "http://localhost"]),
+            Err(CliError::InvalidStatusCode("99".to_owned()))
+        );
+    }
+
+    #[test]
     fn parses_version_flag() {
         assert_eq!(parse(&["--version"]), Ok(CliCommand::Version));
     }
@@ -578,12 +677,65 @@ mod tests {
     }
 
     #[test]
+    fn parses_token_file_auth() {
+        let command =
+            parse(&["--token-file", "token.txt", "http://localhost"]).expect("valid args");
+
+        match command {
+            CliCommand::Run(config) => {
+                assert_eq!(
+                    config.auth,
+                    Some(AuthConfig::BearerTokenFile(PathBuf::from("token.txt")))
+                );
+            }
+            _ => panic!("expected run command"),
+        }
+    }
+
+    #[test]
+    fn parses_token_env_auth() {
+        let command =
+            parse(&["--token-env", "STREAMTAIL_TOKEN", "http://localhost"]).expect("valid args");
+
+        match command {
+            CliCommand::Run(config) => {
+                assert_eq!(
+                    config.auth,
+                    Some(AuthConfig::BearerTokenEnv("STREAMTAIL_TOKEN".to_owned()))
+                );
+            }
+            _ => panic!("expected run command"),
+        }
+    }
+
+    #[test]
+    fn parses_netrc_auth() {
+        let command = parse(&["--netrc", "http://localhost"]).expect("valid args");
+
+        match command {
+            CliCommand::Run(config) => assert!(config.netrc),
+            _ => panic!("expected run command"),
+        }
+    }
+
+    #[test]
     fn rejects_debug_without_log() {
         assert_eq!(
             parse(&["--debug", "http://localhost"]),
             Err(CliError::MissingRequiredFlag {
                 flag: "--debug".to_owned(),
                 required: "--log <PATH>".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_append_output_without_output() {
+        assert_eq!(
+            parse(&["--append-output", "http://localhost"]),
+            Err(CliError::MissingRequiredFlag {
+                flag: "--append-output".to_owned(),
+                required: "--output <PATH>".to_owned(),
             })
         );
     }
@@ -606,6 +758,14 @@ mod tests {
                 "abc123",
                 "http://localhost"
             ]),
+            Err(CliError::ConflictingAuthFlags)
+        );
+    }
+
+    #[test]
+    fn rejects_netrc_with_other_auth() {
+        assert_eq!(
+            parse(&["--netrc", "--token", "abc123", "http://localhost"]),
             Err(CliError::ConflictingAuthFlags)
         );
     }

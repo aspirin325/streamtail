@@ -38,11 +38,22 @@ streamtail https://example.com/logs \
   --token "$STREAMTAIL_TOKEN"
 
 streamtail https://example.com/logs \
+  --token-env STREAMTAIL_TOKEN
+
+streamtail https://example.com/logs \
+  --netrc
+
+streamtail https://example.com/logs \
   --debug --log streamtail.log
 
 streamtail https://example.com/logs \
+  -f \
   --header "X-Env: prod" \
   --output logs.txt
+
+streamtail https://example.com/logs \
+  --output logs.txt \
+  --append-output
 
 streamtail https://example.com/logs \
   --exit-on-match "deploy complete"
@@ -63,13 +74,17 @@ streamtail https://internal.example/logs \
 - Recover from disconnects
 - Retry with exponential backoff
 - Treat 5xx and transport failures as retryable
+- Allow additional retryable HTTP statuses
 - Treat 401 and 403 responses as fatal
-- Send optional Basic or bearer token authentication headers
+- Send optional Basic, bearer token, token-file, token-env, or `.netrc`
+  authentication headers
 - Send repeatable custom HTTP headers
+- Send optional user-agent headers and requests through an explicit proxy
 - Send optional request bodies with configurable HTTP methods
 - Support custom CA certificates and opt-in insecure TLS
+- Start from the end of the initial snapshot when requested
 - Stop automatically on output matches, event counts, or runtime limits
-- Write stream output to a user-selected file
+- Write stream output to a user-selected file, replacing or appending
 - Write optional debug logs to a user-selected file
 
 ## Non-goals
@@ -87,12 +102,19 @@ streamtail https://internal.example/logs \
 - Version output with `--version`
 - Debug logging with `--debug --log <PATH>`
 - HTTP Basic authentication with `--basic-auth <USER:PASS>`
-- Bearer token authentication with `--token <TOKEN>`
+- Bearer token authentication with `--token <TOKEN>`, `--token-file <PATH>`,
+  and `--token-env <NAME>`
+- Opt-in `.netrc` authentication with `--netrc`
 - Custom headers with repeatable `--header <NAME: VALUE>`
+- User-agent and proxy configuration with `--user-agent <VALUE>` and
+  `--proxy <URL>`
 - TLS configuration with `--ca-cert <PATH>` and `--insecure`
-- Output redirection with `--output <PATH>`
+- Output redirection with `--output <PATH>` and append mode with
+  `--append-output`
+- Initial snapshot skipping with `--follow-from-end` / `-f`
 - Exit conditions with `--exit-on-match <REGEX>`, `--max-events <N>`, and
   `--max-duration <DURATION>`
+- Additional retryable status codes with repeatable `--retry-status <CODE>`
 - Method/body requests with `--method <METHOD>` and `--body <TEXT>`
 - Manual CLI parser to keep dependencies minimal
 - SemVer package versions and release tags in `vMAJOR.MINOR.PATCH` format
