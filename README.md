@@ -87,7 +87,34 @@ cargo test --locked --all-targets --all-features
 cargo build --locked --release --bin streamtail
 ```
 
-View the manual page from the source tree:
+## Build on Windows
+
+Install Visual Studio Build Tools 2022 with the `Desktop development with C++`
+workload, then install Rust 1.86 or newer. In PowerShell:
+
+```powershell
+winget install --id Rustlang.Rustup -e
+rustup default stable
+rustup update
+```
+
+Build and run the binary:
+
+```powershell
+cargo build --release
+.\target\release\streamtail.exe --help
+```
+
+Run tests and checks:
+
+```powershell
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo test --locked --all-targets --all-features
+cargo build --locked --release --bin streamtail
+```
+
+On Unix-like systems, view the manual page from the source tree:
 
 ```sh
 man ./docs/man/streamtail.1
