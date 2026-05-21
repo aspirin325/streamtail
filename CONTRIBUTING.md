@@ -38,6 +38,21 @@ cargo fuzz run cli_parse_duration -- -max_total_time=30
 - Update `README.md` or `docs/` when commands, architecture, or release behavior changes.
 - Do not commit `target/` or local tool caches.
 
+
+## Pull Request Checks
+
+Pull requests run the same gates expected before merge:
+
+- formatting with `cargo fmt`
+- linting with `cargo clippy -D warnings`
+- tests on stable Rust
+- tests on the declared MSRV, Rust 1.86
+- release build verification
+- coverage report generation
+- ClusterFuzzLite fuzzing
+- dependency advisory, license, ban, and source checks with `cargo-deny`
+- CodeQL Rust analysis
+
 ## Commit Style
 
 Use clear, imperative commit subjects, for example:

@@ -30,6 +30,7 @@ Each release publishes:
 - SHA-256 checksum files
 - SPDX JSON SBOM files
 - GitHub artifact attestations for release provenance
+- Release-attached Sigstore attestation bundles ending in `.sigstore.json`
 
 The artifact names include the release tag and platform suffix:
 
@@ -157,6 +158,15 @@ gh attestation verify streamtail-v0.1.0-x86_64-redhat-ubi8-linux-gnu.rpm \
   --predicate-type https://spdx.dev/Document/v2.3
 ```
 
+The release also includes `.provenance.sigstore.json` and `.sbom.sigstore.json`
+sidecar files. These are the same generated attestation bundles attached as
+release assets so tools such as OpenSSF Scorecard can detect that the release is
+signed or has provenance.
+
+Releases created before these sidecar files existed will still be counted by
+OpenSSF Scorecard until they fall outside its recent-release window or are
+backfilled with matching signature or provenance assets.
+
 ## Build From Source
 
 Install Rust 1.86 or newer, then build from a checked-out release tag:
@@ -200,6 +210,7 @@ git push origin v0.1.0
 
 6. Wait for the `Release` workflow to finish.
 7. Confirm the GitHub release contains tarballs, the Windows ZIP, RPMs, DEBs,
-   checksums, SPDX SBOMs, and generated release notes.
+   checksums, SPDX SBOMs, Sigstore attestation bundles, and generated release
+   notes.
 8. Download one Linux package and the Windows ZIP, then verify their checksums
    and GitHub attestations.

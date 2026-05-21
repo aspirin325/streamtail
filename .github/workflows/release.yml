@@ -103,18 +103,8 @@ jobs:
           output-file: dist/streamtail-${{ github.ref_name }}-${{ matrix.asset_suffix }}.spdx.json
           upload-artifact: false
 
-      - name: Generate checksums
-        shell: bash
-        run: |
-          (
-            cd dist
-            shopt -s nullglob
-            for artifact in *.tar.gz *.rpm *.deb *.spdx.json; do
-              sha256sum "${artifact}" > "${artifact}.sha256"
-            done
-          )
-
       - name: Attest build provenance
+        id: attest_provenance
         uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4
         with:
           subject-path: |
@@ -123,6 +113,7 @@ jobs:
             dist/*.deb
 
       - name: Attest SBOM
+        id: attest_sbom
         uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4
         with:
           subject-path: |
@@ -130,6 +121,25 @@ jobs:
             dist/*.rpm
             dist/*.deb
           sbom-path: dist/streamtail-${{ github.ref_name }}-${{ matrix.asset_suffix }}.spdx.json
+
+      - name: Publish attestation bundles
+        shell: bash
+        run: |
+          cp '${{ steps.attest_provenance.outputs.bundle-path }}' \
+            "dist/streamtail-${GITHUB_REF_NAME}-${{ matrix.asset_suffix }}.provenance.sigstore.json"
+          cp '${{ steps.attest_sbom.outputs.bundle-path }}' \
+            "dist/streamtail-${GITHUB_REF_NAME}-${{ matrix.asset_suffix }}.sbom.sigstore.json"
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          (
+            cd dist
+            shopt -s nullglob
+            for artifact in *.tar.gz *.rpm *.deb *.spdx.json *.sigstore.json; do
+              sha256sum "${artifact}" > "${artifact}.sha256"
+            done
+          )
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -182,26 +192,36 @@ jobs:
           output-file: dist/streamtail-${{ github.ref_name }}-x86_64-windows-msvc.spdx.json
           upload-artifact: false
 
-      - name: Generate checksums
-        shell: pwsh
-        run: |
-          Get-ChildItem dist -File | Where-Object {
-            $_.Name -match '\.(zip|spdx\.json)$'
-          } | ForEach-Object {
-            $hash = (Get-FileHash -Algorithm SHA256 $_.FullName).Hash.ToLowerInvariant()
-            "$hash  $($_.Name)" | Set-Content -Encoding ascii "$($_.FullName).sha256"
-          }
-
       - name: Attest build provenance
+        id: attest_provenance
         uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4
         with:
           subject-path: dist/*.zip
 
       - name: Attest SBOM
+        id: attest_sbom
         uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4
         with:
           subject-path: dist/*.zip
           sbom-path: dist/streamtail-${{ github.ref_name }}-x86_64-windows-msvc.spdx.json
+
+      - name: Publish attestation bundles
+        shell: pwsh
+        run: |
+          Copy-Item -LiteralPath '${{ steps.attest_provenance.outputs.bundle-path }}' `
+            -Destination "dist\streamtail-$env:GITHUB_REF_NAME-x86_64-windows-msvc.provenance.sigstore.json"
+          Copy-Item -LiteralPath '${{ steps.attest_sbom.outputs.bundle-path }}' `
+            -Destination "dist\streamtail-$env:GITHUB_REF_NAME-x86_64-windows-msvc.sbom.sigstore.json"
+
+      - name: Generate checksums
+        shell: pwsh
+        run: |
+          Get-ChildItem dist -File | Where-Object {
+            $_.Name -match '\.(zip|spdx\.json|sigstore\.json)$'
+          } | ForEach-Object {
+            $hash = (Get-FileHash -Algorithm SHA256 $_.FullName).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)" | Set-Content -Encoding ascii "$($_.FullName).sha256"
+          }
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
