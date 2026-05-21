@@ -169,20 +169,6 @@ docs/man/            Manual pages
 .github/workflows/   CI and release automation
 ```
 
-## Pull Request Checks
-
-Pull requests run the same gates expected before merge:
-
-- formatting with `cargo fmt`
-- linting with `cargo clippy -D warnings`
-- tests on stable Rust
-- tests on the declared MSRV, Rust 1.86
-- release build verification
-- coverage report generation
-- ClusterFuzzLite fuzzing
-- dependency advisory, license, ban, and source checks with `cargo-deny`
-- CodeQL Rust analysis
-
 ## Releases And Packages
 
 Release artifacts include Linux binary tarballs, Windows ZIP archives, RPM
