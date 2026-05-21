@@ -25,19 +25,32 @@ streamtail https://example.com/logs --json
 streamtail https://example.com/logs --basic-auth user:pass
 streamtail https://example.com/logs --token "$STREAMTAIL_TOKEN"
 streamtail https://example.com/logs --debug --log streamtail.log
+streamtail https://example.com/logs --header "X-Env: prod" --output logs.txt
+streamtail https://example.com/logs --exit-on-match "deploy complete"
+streamtail https://example.com/query --method POST --body '{"service":"api"}'
+streamtail https://internal.example/logs --ca-cert ./internal-ca.pem
 ```
 
 Useful options:
 
 ```text
+    --method <METHOD>         HTTP method; defaults to GET, or POST with --body
+    --body <TEXT>             Request body to send
+    --header <NAME: VALUE>    Add an HTTP header; repeatable
 -i, --interval <DURATION>     Poll interval, for example 500ms, 2s, 1m
     --timeout <DURATION>      HTTP timeout per request
     --max-retries <N|unlimited>
                               Retry limit for consecutive retryable failures
     --once                    Fetch once and exit
     --json                    Emit each update as a JSON line
+    --output <PATH>           Write stream output to a file instead of stdout
+    --exit-on-match <REGEX>   Exit after emitted output matches a regex
+    --max-events <N>          Exit after emitting N updates
+    --max-duration <DURATION> Exit after the total runtime duration
     --debug                   Write debug logging; requires --log
     --log <PATH>              Debug log output file
+    --ca-cert <PATH>          Add PEM or DER CA certificate roots for TLS
+    --insecure                Disable TLS certificate verification
     --basic-auth <USER:PASS>  Send HTTP Basic authentication
     --token <TOKEN>           Send bearer token authentication
 ```
