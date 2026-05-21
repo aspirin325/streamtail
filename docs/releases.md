@@ -18,11 +18,13 @@ version = "0.1.0"
 ## Release Artifacts
 
 The release workflow runs for tags matching `v*.*.*`. It builds Linux artifacts
-inside Red Hat UBI 8, Oracle Linux 8, Debian 12, and Ubuntu 24.04 containers.
+inside Red Hat UBI 8, Oracle Linux 8, Debian 12, and Ubuntu 24.04 containers,
+and builds a Windows artifact on the GitHub-hosted Windows runner.
 
 Each release publishes:
 
 - binary tarballs
+- Windows ZIP archives
 - RPM packages for Red Hat and Oracle Linux
 - DEB packages for Debian and Ubuntu
 - SHA-256 checksum files
@@ -40,6 +42,7 @@ streamtail-v0.1.0-x86_64-debian12-linux-gnu.tar.gz
 streamtail-v0.1.0-x86_64-debian12-linux-gnu.deb
 streamtail-v0.1.0-x86_64-ubuntu2404-linux-gnu.tar.gz
 streamtail-v0.1.0-x86_64-ubuntu2404-linux-gnu.deb
+streamtail-v0.1.0-x86_64-windows-msvc.zip
 ```
 
 ## Install RPM Packages
@@ -108,6 +111,27 @@ sudo install -m 0755 streamtail /usr/local/bin/streamtail
 streamtail --help
 ```
 
+## Install Windows ZIP Archives
+
+Download the Windows ZIP and checksum from the GitHub release page. In
+PowerShell:
+
+```powershell
+Invoke-WebRequest `
+  -Uri https://github.com/aspirin325/streamtail/releases/download/v0.1.0/streamtail-v0.1.0-x86_64-windows-msvc.zip `
+  -OutFile streamtail-v0.1.0-x86_64-windows-msvc.zip
+Invoke-WebRequest `
+  -Uri https://github.com/aspirin325/streamtail/releases/download/v0.1.0/streamtail-v0.1.0-x86_64-windows-msvc.zip.sha256 `
+  -OutFile streamtail-v0.1.0-x86_64-windows-msvc.zip.sha256
+
+$expected = (Get-Content .\streamtail-v0.1.0-x86_64-windows-msvc.zip.sha256).Split()[0]
+$actual = (Get-FileHash -Algorithm SHA256 .\streamtail-v0.1.0-x86_64-windows-msvc.zip).Hash.ToLowerInvariant()
+if ($actual -ne $expected) { throw "Checksum mismatch" }
+
+Expand-Archive .\streamtail-v0.1.0-x86_64-windows-msvc.zip -DestinationPath .\streamtail
+.\streamtail\streamtail-v0.1.0-x86_64-windows-msvc\streamtail.exe --help
+```
+
 ## Verify Provenance
 
 Release binaries and packages are attested by GitHub Actions. After downloading
@@ -115,6 +139,13 @@ an artifact, verify its attestation with the GitHub CLI:
 
 ```sh
 gh attestation verify streamtail-v0.1.0-x86_64-redhat-ubi8-linux-gnu.rpm \
+  --repo aspirin325/streamtail
+```
+
+On Windows, verify the ZIP artifact from PowerShell:
+
+```powershell
+gh attestation verify .\streamtail-v0.1.0-x86_64-windows-msvc.zip `
   --repo aspirin325/streamtail
 ```
 
@@ -168,6 +199,7 @@ git push origin v0.1.0
 ```
 
 6. Wait for the `Release` workflow to finish.
-7. Confirm the GitHub release contains tarballs, RPMs, DEBs, checksums, SPDX
-   SBOMs, and generated release notes.
-8. Download one RPM or DEB and verify its checksum and GitHub attestation.
+7. Confirm the GitHub release contains tarballs, the Windows ZIP, RPMs, DEBs,
+   checksums, SPDX SBOMs, and generated release notes.
+8. Download one Linux package and the Windows ZIP, then verify their checksums
+   and GitHub attestations.

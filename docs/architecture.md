@@ -53,4 +53,4 @@ Responsible for:
 - Security CI runs dependency advisory, license, ban, and source checks with `cargo-deny`.
 - CodeQL scans Rust code on pull requests, protected branch pushes, scheduled runs, and manual runs.
 - OpenSSF Scorecard runs on protected branch pushes, scheduled runs, and manual runs.
-- Release builds publish tarballs, RPMs, DEBs, checksums, SBOMs, and GitHub artifact attestations.
+- Release builds publish tarballs, a Windows ZIP, RPMs, DEBs, checksums, SBOMs, and GitHub artifact attestations.

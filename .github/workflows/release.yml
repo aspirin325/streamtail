@@ -137,10 +137,84 @@ jobs:
           name: streamtail-${{ matrix.asset_suffix }}
           path: dist/*
 
+  build-windows:
+    name: Build x86_64-windows-msvc
+    runs-on: windows-latest
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Validate release tag
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_NAME -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') {
+            Write-Error "Release tags must use SemVer format vMAJOR.MINOR.PATCH, for example v0.1.0."
+            exit 1
+          }
+
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Build release binary
+        run: cargo build --locked --release --bin streamtail
+
+      - name: Package binary
+        shell: pwsh
+        run: |
+          $asset = "streamtail-$env:GITHUB_REF_NAME-x86_64-windows-msvc"
+          $packageDir = "package\$asset"
+          New-Item -ItemType Directory -Force -Path dist, $packageDir | Out-Null
+          Copy-Item target\release\streamtail.exe "$packageDir\streamtail.exe"
+          Copy-Item README.md "$packageDir\README.md"
+          Copy-Item LICENSE "$packageDir\LICENSE"
+          Compress-Archive -Path $packageDir -DestinationPath "dist\$asset.zip" -Force
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: dist/streamtail-${{ github.ref_name }}-x86_64-windows-msvc.spdx.json
+          upload-artifact: false
+
+      - name: Generate checksums
+        shell: pwsh
+        run: |
+          Get-ChildItem dist -File | Where-Object {
+            $_.Name -match '\.(zip|spdx\.json)$'
+          } | ForEach-Object {
+            $hash = (Get-FileHash -Algorithm SHA256 $_.FullName).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)" | Set-Content -Encoding ascii "$($_.FullName).sha256"
+          }
+
+      - name: Attest build provenance
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4
+        with:
+          subject-path: dist/*.zip
+
+      - name: Attest SBOM
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4
+        with:
+          subject-path: dist/*.zip
+          sbom-path: dist/streamtail-${{ github.ref_name }}-x86_64-windows-msvc.spdx.json
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: streamtail-x86_64-windows-msvc
+          path: dist/*
+
   publish:
     name: Publish GitHub release
     runs-on: ubuntu-latest
-    needs: build-linux
+    needs:
+      - build-linux
+      - build-windows
     permissions:
       contents: write
 

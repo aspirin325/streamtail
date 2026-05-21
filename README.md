@@ -154,7 +154,7 @@ Pull requests run the same gates expected before merge:
 
 ## Releases And Packages
 
-Release artifacts include Linux binary tarballs, RPM packages, DEB packages,
-checksums, SPDX SBOMs, and GitHub artifact attestations. See
+Release artifacts include Linux binary tarballs, Windows ZIP archives, RPM
+packages, DEB packages, checksums, SPDX SBOMs, and GitHub artifact attestations. See
 [`docs/releases.md`](docs/releases.md) for installation commands, verification
 steps, and the maintainer release checklist.
