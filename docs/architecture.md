@@ -44,10 +44,12 @@ Responsible for:
 - `src/renderer/`: terminal and pipe output
 - `src/retry/`: retry policy and backoff
 - `docs/man/streamtail.1`: manual page installed by Linux packages
+- `fuzz/`: cargo-fuzz targets used by ClusterFuzzLite
 
 ## Quality gates
 
 - Pull request CI runs formatting, linting, tests, MSRV verification, coverage, and release build checks.
+- Fuzz CI runs ClusterFuzzLite against cargo-fuzz targets.
 - Security CI runs dependency advisory, license, ban, and source checks with `cargo-deny`.
 - CodeQL scans Rust code on pull requests, protected branch pushes, scheduled runs, and manual runs.
 - OpenSSF Scorecard runs on protected branch pushes, scheduled runs, and manual runs.

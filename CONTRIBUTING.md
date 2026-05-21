@@ -25,8 +25,10 @@ Optional security and coverage checks:
 ```sh
 cargo install --locked cargo-deny
 cargo install --locked cargo-llvm-cov
+cargo install --locked cargo-fuzz
 cargo deny --all-features check
 cargo llvm-cov --locked --workspace --all-targets --all-features
+cargo fuzz run cli_parse_duration -- -max_total_time=30
 ```
 
 ## Pull Requests

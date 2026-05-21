@@ -1,0 +1,24 @@
+[package]
+name = "streamtail-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+streamtail = { path = ".." }
+
+[[bin]]
+name = "cli_parse_duration"
+path = "fuzz_targets/cli_parse_duration.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "diff_update"
+path = "fuzz_targets/diff_update.rs"
+test = false
+doc = false

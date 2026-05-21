@@ -120,6 +120,7 @@ Pull requests run the same gates expected before merge:
 - tests on the declared MSRV, Rust 1.86
 - release build verification
 - coverage report generation
+- ClusterFuzzLite fuzzing
 - dependency advisory, license, ban, and source checks with `cargo-deny`
 - CodeQL Rust analysis
 
