@@ -1,5 +1,13 @@
 # streamtail
 
+[![CI](https://github.com/aspirin325/streamtail/actions/workflows/ci.yml/badge.svg)](https://github.com/aspirin325/streamtail/actions/workflows/ci.yml)
+[![Security](https://github.com/aspirin325/streamtail/actions/workflows/security.yml/badge.svg)](https://github.com/aspirin325/streamtail/actions/workflows/security.yml)
+[![CodeQL](https://github.com/aspirin325/streamtail/actions/workflows/codeql.yml/badge.svg)](https://github.com/aspirin325/streamtail/actions/workflows/codeql.yml)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/aspirin325/streamtail/badge)](https://securityscorecards.dev/viewer/?uri=github.com/aspirin325/streamtail)
+[![Release](https://img.shields.io/github/v/release/aspirin325/streamtail?sort=semver)](https://github.com/aspirin325/streamtail/releases)
+[![License](https://img.shields.io/github/license/aspirin325/streamtail)](LICENSE)
+[![MSRV](https://img.shields.io/badge/MSRV-1.86-orange)](Cargo.toml)
+
 `streamtail` is a terminal utility for following changing web content, similar to
 `tail -f` for URLs. It polls HTTP/HTTPS endpoints, detects appended content, and
 prints only the new text after the first snapshot.
@@ -53,6 +61,38 @@ cargo test --locked --all-targets --all-features
 cargo build --locked --release --bin streamtail
 ```
 
+## Build on macOS
+
+Install Apple command-line tools and Rust 1.86 or newer:
+
+```sh
+xcode-select --install
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+```
+
+Build and run the binary:
+
+```sh
+cargo build --release
+./target/release/streamtail --help
+```
+
+Run tests and checks:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo test --locked --all-targets --all-features
+cargo build --locked --release --bin streamtail
+```
+
+View the manual page from the source tree:
+
+```sh
+man ./docs/man/streamtail.1
+```
+
 ## Project Layout
 
 ```text
@@ -66,6 +106,7 @@ src/renderer/        Text and JSON Lines output
 src/retry/           Retry limits and exponential backoff
 tests/               Integration tests
 docs/                Product spec, architecture, roadmap, and testing notes
+docs/man/            Manual pages
 .github/workflows/   CI and release automation
 ```
 
@@ -95,17 +136,62 @@ git push origin v0.1.0
 ```
 
 GitHub Actions builds release binaries inside Red Hat UBI 8 and Oracle Linux 8
-containers, then publishes:
+containers, and inside Debian 12 and Ubuntu 24.04 containers. It publishes:
 
 - binary tarballs
+- RPM packages for Red Hat and Oracle Linux
+- DEB packages for Debian and Ubuntu
 - SHA-256 checksum files
 - SPDX JSON SBOM files
 - GitHub artifact attestations for release provenance
 
-Verify a downloaded tarball:
+Download the package that matches your system from the GitHub release page:
+
+- Red Hat / RHEL-compatible: `streamtail-v0.1.0-x86_64-redhat-ubi8-linux-gnu.rpm`
+- Oracle Linux: `streamtail-v0.1.0-x86_64-oraclelinux8-linux-gnu.rpm`
+- Debian 12: `streamtail-v0.1.0-x86_64-debian12-linux-gnu.deb`
+- Ubuntu 24.04: `streamtail-v0.1.0-x86_64-ubuntu2404-linux-gnu.deb`
+
+Install on Red Hat or RHEL-compatible systems:
 
 ```sh
-sha256sum -c streamtail-v0.1.0-x86_64-redhat-ubi8-linux-gnu.sha256
+sudo dnf install ./streamtail-v0.1.0-x86_64-redhat-ubi8-linux-gnu.rpm
+streamtail --help
+man streamtail
+```
+
+Install on Oracle Linux:
+
+```sh
+sudo dnf install ./streamtail-v0.1.0-x86_64-oraclelinux8-linux-gnu.rpm
+streamtail --help
+man streamtail
+```
+
+Install on Debian:
+
+```sh
+sudo apt install ./streamtail-v0.1.0-x86_64-debian12-linux-gnu.deb
+streamtail --help
+man streamtail
+```
+
+Install on Ubuntu:
+
+```sh
+sudo apt install ./streamtail-v0.1.0-x86_64-ubuntu2404-linux-gnu.deb
+streamtail --help
+man streamtail
+```
+
+Verify a downloaded tarball or package:
+
+```sh
+sha256sum -c streamtail-v0.1.0-x86_64-redhat-ubi8-linux-gnu.rpm.sha256
+gh attestation verify streamtail-v0.1.0-x86_64-redhat-ubi8-linux-gnu.rpm \
+  --repo aspirin325/streamtail
+
+sha256sum -c streamtail-v0.1.0-x86_64-redhat-ubi8-linux-gnu.tar.gz.sha256
 gh attestation verify streamtail-v0.1.0-x86_64-redhat-ubi8-linux-gnu.tar.gz \
   --repo aspirin325/streamtail
 ```

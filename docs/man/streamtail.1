@@ -1,0 +1,73 @@
+.TH STREAMTAIL 1 "May 20, 2026" "streamtail 0.1.0" "User Commands"
+.SH NAME
+streamtail \- follow changing HTTP content like tail -f for URLs
+.SH SYNOPSIS
+.B streamtail
+.RI [ OPTIONS ] " URL"
+.SH DESCRIPTION
+.B streamtail
+polls an HTTP or HTTPS URL, keeps a snapshot of the previous response body,
+and writes only newly appended response text to standard output.
+.PP
+It is intended for terminal and pipe workflows where a remote endpoint behaves
+like an append-only log, status feed, or simple text stream.
+.SH OPTIONS
+.TP
+.BR \-i ", " \-\-interval " " \fIDURATION\fR
+Polling interval. Durations support suffixes such as
+.BR ms ,
+.BR s ,
+.BR m ,
+and
+.BR h .
+The default interval is 2s.
+.TP
+.BR \-\-timeout " " \fIDURATION\fR
+HTTP timeout per request. The default timeout is 10s.
+.TP
+.BR \-\-max-retries " " \fIN|unlimited\fR
+Maximum number of consecutive retryable failures before exiting. The default is
+.BR unlimited .
+.TP
+.BR \-\-once
+Fetch once, print the initial body, and exit.
+.TP
+.BR \-\-json
+Emit each update as a JSON Lines record with a
+.B data
+field.
+.TP
+.BR \-h ", " \-\-help
+Print command help.
+.TP
+.BR \-V ", " \-\-version
+Print the version.
+.SH EXIT STATUS
+.TP
+.B 0
+Completed successfully.
+.TP
+.B 1
+Runtime failure, such as a non-retryable HTTP response or output error.
+.TP
+.B 2
+Invalid command-line arguments.
+.SH EXAMPLES
+.TP
+Follow a URL:
+.B streamtail https://example.com/logs
+.TP
+Poll every two seconds:
+.B streamtail https://example.com/api/events --interval 2s
+.TP
+Fetch once:
+.B streamtail https://example.com/ --once
+.TP
+Emit JSON Lines:
+.B streamtail https://example.com/logs --json
+.SH NOTES
+HTTP 5xx responses and transport failures are retryable. HTTP 401 and 403
+responses are fatal.
+.SH SEE ALSO
+.BR tail (1),
+.BR curl (1)
