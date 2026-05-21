@@ -30,6 +30,15 @@ streamtail https://example.com/api/events \
 
 streamtail https://example.com/stream \
   --json
+
+streamtail https://example.com/logs \
+  --basic-auth user:pass
+
+streamtail https://example.com/logs \
+  --token "$STREAMTAIL_TOKEN"
+
+streamtail https://example.com/logs \
+  --debug --log streamtail.log
 ```
 
 ## Core behavior
@@ -41,6 +50,8 @@ streamtail https://example.com/stream \
 - Retry with exponential backoff
 - Treat 5xx and transport failures as retryable
 - Treat 401 and 403 responses as fatal
+- Send optional Basic or bearer token authentication headers
+- Write optional debug logs to a user-selected file
 
 ## Non-goals
 
@@ -54,5 +65,9 @@ streamtail https://example.com/stream \
 - Append-only diffing between response snapshots
 - Plain text output by default
 - JSON Lines output with `--json`
+- Version output with `--version`
+- Debug logging with `--debug --log <PATH>`
+- HTTP Basic authentication with `--basic-auth <USER:PASS>`
+- Bearer token authentication with `--token <TOKEN>`
 - Manual CLI parser to keep dependencies minimal
 - SemVer package versions and release tags in `vMAJOR.MINOR.PATCH` format

@@ -1,4 +1,4 @@
-use std::{fmt, time::Duration};
+use std::{fmt, path::PathBuf, time::Duration};
 
 use crate::retry::RetryLimit;
 
@@ -13,6 +13,24 @@ pub struct Config {
     pub retry_limit: RetryLimit,
     pub once: bool,
     pub json: bool,
+    pub debug: bool,
+    pub log_path: Option<PathBuf>,
+    pub auth: Option<AuthConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuthConfig {
+    Basic { username: String, password: String },
+    BearerToken(String),
+}
+
+impl AuthConfig {
+    pub fn scheme_name(&self) -> &'static str {
+        match self {
+            Self::Basic { .. } => "basic",
+            Self::BearerToken(_) => "bearer",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,7 +49,10 @@ pub enum CliError {
     InvalidDuration(String),
     InvalidRetryLimit(String),
     InvalidUrl(String),
+    InvalidBasicAuth(String),
     ZeroDuration(String),
+    MissingRequiredFlag { flag: String, required: String },
+    ConflictingAuthFlags,
 }
 
 impl fmt::Display for CliError {
@@ -44,7 +65,20 @@ impl fmt::Display for CliError {
             Self::InvalidDuration(value) => write!(formatter, "invalid duration '{value}'"),
             Self::InvalidRetryLimit(value) => write!(formatter, "invalid retry limit '{value}'"),
             Self::InvalidUrl(url) => write!(formatter, "unsupported URL '{url}'"),
+            Self::InvalidBasicAuth(value) => write!(
+                formatter,
+                "invalid basic auth value '{value}', expected USER:PASSWORD"
+            ),
             Self::ZeroDuration(flag) => write!(formatter, "{flag} must be greater than zero"),
+            Self::MissingRequiredFlag { flag, required } => {
+                write!(formatter, "{flag} requires {required}")
+            }
+            Self::ConflictingAuthFlags => {
+                write!(
+                    formatter,
+                    "--basic-auth and --token cannot be used together"
+                )
+            }
         }
     }
 }
@@ -62,6 +96,9 @@ where
     let mut retry_limit = RetryLimit::Unlimited;
     let mut once = false;
     let mut json = false;
+    let mut debug = false;
+    let mut log_path = None;
+    let mut auth = None;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -72,6 +109,17 @@ where
             "--max-retries" => retry_limit = parse_flag_retry_limit(&mut args, &arg)?,
             "--once" => once = true,
             "--json" => json = true,
+            "--debug" => debug = true,
+            "--log" => log_path = Some(PathBuf::from(next_value(&mut args, &arg)?)),
+            "--basic-auth" => {
+                set_auth(&mut auth, parse_basic_auth(&next_value(&mut args, &arg)?)?)?;
+            }
+            "--token" => {
+                set_auth(
+                    &mut auth,
+                    AuthConfig::BearerToken(next_value(&mut args, &arg)?),
+                )?;
+            }
             _ if arg.starts_with('-') => return Err(CliError::UnknownFlag(arg)),
             _ if url.is_none() => url = Some(arg),
             _ => return Err(CliError::UnexpectedArgument(arg)),
@@ -80,6 +128,12 @@ where
 
     validate_nonzero(interval, "--interval")?;
     validate_nonzero(timeout, "--timeout")?;
+    if debug && log_path.is_none() {
+        return Err(CliError::MissingRequiredFlag {
+            flag: "--debug".to_owned(),
+            required: "--log <PATH>".to_owned(),
+        });
+    }
     let url = url.ok_or(CliError::MissingUrl)?;
     validate_url(&url)?;
 
@@ -90,6 +144,9 @@ where
         retry_limit,
         once,
         json,
+        debug,
+        log_path,
+        auth,
     }))
 }
 
@@ -110,11 +167,39 @@ OPTIONS:
                                   Retry limit for consecutive retryable failures
         --once                    Fetch once and exit
         --json                    Emit each update as a JSON line
+        --debug                   Write debug logging; requires --log
+        --log <PATH>              Debug log output file
+        --basic-auth <USER:PASS>  Send HTTP Basic authentication
+        --token <TOKEN>           Send bearer token authentication
     -h, --help                    Print help
     -V, --version                 Print version
 ",
         version = env!("CARGO_PKG_VERSION")
     )
+}
+
+fn set_auth(auth: &mut Option<AuthConfig>, value: AuthConfig) -> Result<(), CliError> {
+    if auth.is_some() {
+        Err(CliError::ConflictingAuthFlags)
+    } else {
+        *auth = Some(value);
+        Ok(())
+    }
+}
+
+fn parse_basic_auth(value: &str) -> Result<AuthConfig, CliError> {
+    let (username, password) = value
+        .split_once(':')
+        .ok_or_else(|| CliError::InvalidBasicAuth(value.to_owned()))?;
+
+    if username.is_empty() {
+        Err(CliError::InvalidBasicAuth(value.to_owned()))
+    } else {
+        Ok(AuthConfig::Basic {
+            username: username.to_owned(),
+            password: password.to_owned(),
+        })
+    }
 }
 
 fn parse_flag_duration<I>(args: &mut I, flag: &str) -> Result<Duration, CliError>
@@ -220,6 +305,9 @@ mod tests {
                 assert_eq!(config.interval, DEFAULT_INTERVAL);
                 assert_eq!(config.timeout, DEFAULT_TIMEOUT);
                 assert_eq!(config.retry_limit, RetryLimit::Unlimited);
+                assert!(!config.debug);
+                assert_eq!(config.log_path, None);
+                assert_eq!(config.auth, None);
             }
             _ => panic!("expected run command"),
         }
@@ -244,6 +332,9 @@ mod tests {
             "3",
             "--once",
             "--json",
+            "--debug",
+            "--log",
+            "streamtail.log",
             "http://localhost",
         ])
         .expect("valid args");
@@ -255,9 +346,83 @@ mod tests {
                 assert_eq!(config.retry_limit, RetryLimit::Limited(3));
                 assert!(config.once);
                 assert!(config.json);
+                assert!(config.debug);
+                assert_eq!(config.log_path, Some(PathBuf::from("streamtail.log")));
             }
             _ => panic!("expected run command"),
         }
+    }
+
+    #[test]
+    fn parses_version_flag() {
+        assert_eq!(parse(&["--version"]), Ok(CliCommand::Version));
+    }
+
+    #[test]
+    fn parses_basic_auth() {
+        let command =
+            parse(&["--basic-auth", "alice:secret", "http://localhost"]).expect("valid args");
+
+        match command {
+            CliCommand::Run(config) => {
+                assert_eq!(
+                    config.auth,
+                    Some(AuthConfig::Basic {
+                        username: "alice".to_owned(),
+                        password: "secret".to_owned(),
+                    })
+                );
+            }
+            _ => panic!("expected run command"),
+        }
+    }
+
+    #[test]
+    fn parses_token_auth() {
+        let command = parse(&["--token", "abc123", "http://localhost"]).expect("valid args");
+
+        match command {
+            CliCommand::Run(config) => {
+                assert_eq!(
+                    config.auth,
+                    Some(AuthConfig::BearerToken("abc123".to_owned()))
+                );
+            }
+            _ => panic!("expected run command"),
+        }
+    }
+
+    #[test]
+    fn rejects_debug_without_log() {
+        assert_eq!(
+            parse(&["--debug", "http://localhost"]),
+            Err(CliError::MissingRequiredFlag {
+                flag: "--debug".to_owned(),
+                required: "--log <PATH>".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_basic_auth() {
+        assert_eq!(
+            parse(&["--basic-auth", "alice", "http://localhost"]),
+            Err(CliError::InvalidBasicAuth("alice".to_owned()))
+        );
+    }
+
+    #[test]
+    fn rejects_conflicting_auth_flags() {
+        assert_eq!(
+            parse(&[
+                "--basic-auth",
+                "alice:secret",
+                "--token",
+                "abc123",
+                "http://localhost"
+            ]),
+            Err(CliError::ConflictingAuthFlags)
+        );
     }
 
     #[test]

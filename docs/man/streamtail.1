@@ -37,6 +37,21 @@ Emit each update as a JSON Lines record with a
 .B data
 field.
 .TP
+.BR \-\-debug
+Write debug logging to the file selected with
+.BR \-\-log .
+This option requires
+.BR \-\-log .
+.TP
+.BR \-\-log " " \fIPATH\fR
+Debug log output file.
+.TP
+.BR \-\-basic-auth " " \fIUSER:PASSWORD\fR
+Send HTTP Basic authentication credentials.
+.TP
+.BR \-\-token " " \fITOKEN\fR
+Send bearer token authentication in the Authorization header.
+.TP
 .BR \-h ", " \-\-help
 Print command help.
 .TP
@@ -65,6 +80,15 @@ Fetch once:
 .TP
 Emit JSON Lines:
 .B streamtail https://example.com/logs --json
+.TP
+Use Basic authentication:
+.B streamtail https://example.com/logs --basic-auth user:pass
+.TP
+Use bearer token authentication:
+.B streamtail https://example.com/logs --token "$STREAMTAIL_TOKEN"
+.TP
+Write debug logs:
+.B streamtail https://example.com/logs --debug --log streamtail.log
 .SH NOTES
 HTTP 5xx responses and transport failures are retryable. HTTP 401 and 403
 responses are fatal.

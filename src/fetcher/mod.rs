@@ -1,5 +1,9 @@
 use std::{fmt, time::Duration};
 
+use base64::{engine::general_purpose, Engine as _};
+
+use crate::cli::AuthConfig;
+
 pub trait Fetcher {
     fn fetch(&self) -> Result<String, FetchError>;
 }
@@ -37,6 +41,7 @@ impl std::error::Error for FetchError {}
 pub struct HttpFetcher {
     agent: ureq::Agent,
     url: String,
+    auth: Option<AuthConfig>,
 }
 
 impl HttpFetcher {
@@ -50,18 +55,42 @@ impl HttpFetcher {
         Self {
             agent,
             url: url.into(),
+            auth: None,
         }
+    }
+
+    pub fn with_auth(mut self, auth: Option<AuthConfig>) -> Self {
+        self.auth = auth;
+        self
     }
 }
 
 impl Fetcher for HttpFetcher {
     fn fetch(&self) -> Result<String, FetchError> {
-        match self.agent.get(&self.url).call() {
+        match self.authorized_request().call() {
             Ok(response) => read_body(response),
             Err(ureq::Error::Status(status, _response)) => status_error(status),
             Err(ureq::Error::Transport(err)) => {
                 Err(FetchError::retryable(format!("transport error: {err}")))
             }
+        }
+    }
+}
+
+impl HttpFetcher {
+    fn authorized_request(&self) -> ureq::Request {
+        let request = self.agent.get(&self.url);
+
+        match &self.auth {
+            Some(AuthConfig::Basic { username, password }) => {
+                let credentials = format!("{username}:{password}");
+                let encoded = general_purpose::STANDARD.encode(credentials.as_bytes());
+                request.set("Authorization", &format!("Basic {encoded}"))
+            }
+            Some(AuthConfig::BearerToken(token)) => {
+                request.set("Authorization", &format!("Bearer {token}"))
+            }
+            None => request,
         }
     }
 }
