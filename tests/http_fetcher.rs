@@ -2,7 +2,10 @@ use std::{
     io::{Read, Write},
     net::TcpListener,
     path::PathBuf,
-    sync::mpsc::{self, Receiver},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        mpsc::{self, Receiver},
+    },
     thread::{self, JoinHandle},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -11,6 +14,8 @@ use streamtail::{
     cli::{self, AuthConfig, CliCommand, HeaderConfig},
     fetcher::{Fetcher, HttpFetcher},
 };
+
+static UNIQUE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn serve_once(status: u16, body: &str) -> (String, JoinHandle<()>) {
     let (url, _requests, handle) = serve_once_with_request(status, body);
@@ -98,6 +103,17 @@ fn fetcher_marks_auth_errors_fatal() {
 }
 
 #[test]
+fn fetcher_retries_configured_statuses() {
+    let (url, handle) = serve_once(404, "not found");
+    let fetcher = HttpFetcher::new(url, Duration::from_secs(2)).with_retry_statuses(vec![404]);
+
+    let error = fetcher.fetch().expect_err("404 should fail");
+    handle.join().expect("server thread should finish");
+
+    assert!(error.is_retryable());
+}
+
+#[test]
 fn fetcher_sends_basic_auth_header() {
     let (url, requests, handle) = serve_once_with_request(200, "hello");
     let fetcher =
@@ -129,6 +145,60 @@ fn fetcher_sends_bearer_token_header() {
 }
 
 #[test]
+fn fetcher_sends_bearer_token_from_file() {
+    let (url, requests, handle) = serve_once_with_request(200, "hello");
+    let token_path = unique_output_path();
+    std::fs::write(&token_path, "file-token\n").expect("token file should be writable");
+    let command = cli::parse_args([
+        "--once".to_owned(),
+        "--token-file".to_owned(),
+        token_path.display().to_string(),
+        url,
+    ])
+    .expect("valid args");
+
+    let CliCommand::Run(config) = command else {
+        panic!("expected run command");
+    };
+
+    let fetcher = HttpFetcher::from_config(&config).expect("fetcher should build");
+    let body = fetcher.fetch().expect("fetch should succeed");
+    handle.join().expect("server thread should finish");
+    let request = requests.recv().expect("request should be captured");
+    let _ = std::fs::remove_file(&token_path);
+
+    assert_eq!(body, "hello");
+    assert!(request.contains("Authorization: Bearer file-token"));
+}
+
+#[test]
+fn fetcher_sends_bearer_token_from_env() {
+    let (url, requests, handle) = serve_once_with_request(200, "hello");
+    let env_name = format!("STREAMTAIL_TEST_TOKEN_{}", unique_id());
+    std::env::set_var(&env_name, "env-token");
+    let command = cli::parse_args([
+        "--once".to_owned(),
+        "--token-env".to_owned(),
+        env_name.clone(),
+        url,
+    ])
+    .expect("valid args");
+
+    let CliCommand::Run(config) = command else {
+        panic!("expected run command");
+    };
+
+    let fetcher = HttpFetcher::from_config(&config).expect("fetcher should build");
+    let body = fetcher.fetch().expect("fetch should succeed");
+    handle.join().expect("server thread should finish");
+    let request = requests.recv().expect("request should be captured");
+    std::env::remove_var(env_name);
+
+    assert_eq!(body, "hello");
+    assert!(request.contains("Authorization: Bearer env-token"));
+}
+
+#[test]
 fn fetcher_sends_method_headers_and_body() {
     let (url, requests, handle) = serve_once_with_request(200, "hello");
     let fetcher = HttpFetcher::new(url, Duration::from_secs(2))
@@ -156,6 +226,19 @@ fn fetcher_sends_method_headers_and_body() {
 }
 
 #[test]
+fn fetcher_sends_user_agent_header() {
+    let (url, requests, handle) = serve_once_with_request(200, "hello");
+    let fetcher = HttpFetcher::new(url, Duration::from_secs(2)).with_user_agent("streamtail-test");
+
+    let body = fetcher.fetch().expect("fetch should succeed");
+    handle.join().expect("server thread should finish");
+    let request = requests.recv().expect("request should be captured");
+
+    assert_eq!(body, "hello");
+    assert!(request.contains("User-Agent: streamtail-test"));
+}
+
+#[test]
 fn run_writes_stream_output_to_configured_file() {
     let (url, handle) = serve_once(200, "hello");
     let output_path = unique_output_path();
@@ -180,14 +263,43 @@ fn run_writes_stream_output_to_configured_file() {
     assert_eq!(output, "hello");
 }
 
+#[test]
+fn run_appends_stream_output_to_configured_file() {
+    let (url, handle) = serve_once(200, "hello");
+    let output_path = unique_output_path();
+    std::fs::write(&output_path, "existing\n").expect("output should be writable");
+    let command = cli::parse_args([
+        "--once".to_owned(),
+        "--output".to_owned(),
+        output_path.display().to_string(),
+        "--append-output".to_owned(),
+        url,
+    ])
+    .expect("valid args");
+
+    let CliCommand::Run(config) = command else {
+        panic!("expected run command");
+    };
+
+    streamtail::run(*config).expect("run should succeed");
+    handle.join().expect("server thread should finish");
+
+    let output = std::fs::read_to_string(&output_path).expect("output should be readable");
+    let _ = std::fs::remove_file(&output_path);
+
+    assert_eq!(output, "existing\nhello");
+}
+
 fn unique_output_path() -> PathBuf {
+    std::env::temp_dir().join(format!("streamtail-output-test-{}.txt", unique_id()))
+}
+
+fn unique_id() -> String {
+    let sequence = UNIQUE_COUNTER.fetch_add(1, Ordering::Relaxed);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system clock should be valid")
         .as_nanos();
 
-    std::env::temp_dir().join(format!(
-        "streamtail-output-test-{}-{nanos}.txt",
-        std::process::id()
-    ))
+    format!("{}-{sequence}-{nanos}", std::process::id())
 }

@@ -52,12 +52,16 @@ pub fn run(config: Config) -> Result<(), AppError> {
     let fetcher = HttpFetcher::from_config(&config)?;
 
     if let Some(path) = &config.output_path {
-        let mut file = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(path)
-            .map_err(AppError::OutputIo)?;
+        let mut options = OpenOptions::new();
+        options.create(true).write(true);
+
+        if config.append_output {
+            options.append(true);
+        } else {
+            options.truncate(true);
+        }
+
+        let mut file = options.open(path).map_err(AppError::OutputIo)?;
         run_with(fetcher, &mut file, &config)
     } else {
         let stdout = io::stdout();
@@ -76,6 +80,7 @@ where
     let mut consecutive_failures = 0_u32;
     let mut fetch_attempts = 0_u64;
     let mut emitted_events = 0_u64;
+    let mut baseline_pending = config.follow_from_end;
     let backoff = Backoff::default();
     let mut logger = DebugLogger::open(config)?;
     let exit_on_match = match &config.exit_on_match {
@@ -88,19 +93,21 @@ where
     log_debug(
         &mut logger,
         format!(
-            "streamtail {} started; url={}; method={}; interval={:?}; timeout={:?}; once={}; json={}; auth={}",
+            "streamtail {} started; url={}; method={}; interval={:?}; timeout={:?}; once={}; follow_from_end={}; json={}; auth={}; netrc={}",
             env!("CARGO_PKG_VERSION"),
             config.url,
             config.method,
             config.interval,
             config.timeout,
             config.once,
+            config.follow_from_end,
             config.json,
             config
                 .auth
                 .as_ref()
                 .map(|auth| auth.scheme_name())
-                .unwrap_or("none")
+                .unwrap_or("none"),
+            config.netrc
         ),
     )?;
 
@@ -114,7 +121,16 @@ where
         match fetcher.fetch() {
             Ok(body) => {
                 consecutive_failures = 0;
-                let change = emit_change(&mut diff_engine, &mut renderer, &body)?;
+                let change = if baseline_pending {
+                    baseline_pending = false;
+                    diff_engine.update(&body);
+                    EmittedChange {
+                        kind: "baseline",
+                        text: None,
+                    }
+                } else {
+                    emit_change(&mut diff_engine, &mut renderer, &body)?
+                };
                 if change.text.is_some() {
                     emitted_events = emitted_events.saturating_add(1);
                 }
@@ -328,15 +344,21 @@ mod tests {
             interval: Duration::from_millis(1),
             timeout: Duration::from_secs(1),
             retry_limit: RetryLimit::Limited(0),
+            retry_statuses: Vec::new(),
             once: true,
+            follow_from_end: false,
             json: false,
             debug: false,
             log_path: None,
             output_path: None,
+            append_output: false,
             auth: None,
+            netrc: false,
             method: "GET".to_owned(),
             body: None,
             headers: Vec::new(),
+            user_agent: None,
+            proxy: None,
             ca_cert_path: None,
             insecure: false,
             exit_on_match: None,
@@ -402,6 +424,21 @@ mod tests {
         run_with(fetcher, &mut output, &config).expect("run should succeed");
 
         assert_eq!(output, b"ready");
+    }
+
+    #[test]
+    fn follow_from_end_skips_initial_body() {
+        let fetcher =
+            SequenceFetcher::new(vec![Ok("hello".to_owned()), Ok("hello world".to_owned())]);
+        let mut config = test_config();
+        config.once = false;
+        config.follow_from_end = true;
+        config.max_events = Some(1);
+        let mut output = Vec::new();
+
+        run_with(fetcher, &mut output, &config).expect("run should succeed");
+
+        assert_eq!(output, b" world");
     }
 
     #[test]

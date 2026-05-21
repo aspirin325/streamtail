@@ -1,5 +1,5 @@
 use std::{
-    fmt, fs,
+    env, fmt, fs,
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -49,7 +49,9 @@ pub struct HttpFetcher {
     method: String,
     body: Option<String>,
     headers: Vec<HeaderConfig>,
+    user_agent: Option<String>,
     auth: Option<AuthConfig>,
+    retry_statuses: Vec<u16>,
 }
 
 impl HttpFetcher {
@@ -66,7 +68,9 @@ impl HttpFetcher {
             method: "GET".to_owned(),
             body: None,
             headers: Vec::new(),
+            user_agent: None,
             auth: None,
+            retry_statuses: Vec::new(),
         }
     }
 
@@ -75,7 +79,9 @@ impl HttpFetcher {
             config.timeout,
             config.ca_cert_path.as_ref(),
             config.insecure,
+            config.proxy.as_deref(),
         )?;
+        let auth = resolve_auth(&config.url, config.auth.as_ref(), config.netrc)?;
 
         Ok(Self {
             agent,
@@ -83,7 +89,9 @@ impl HttpFetcher {
             method: config.method.clone(),
             body: config.body.clone(),
             headers: config.headers.clone(),
-            auth: config.auth.clone(),
+            user_agent: config.user_agent.clone(),
+            auth,
+            retry_statuses: config.retry_statuses.clone(),
         })
     }
 
@@ -97,24 +105,37 @@ impl HttpFetcher {
         self
     }
 
+    pub fn with_user_agent(mut self, user_agent: impl Into<String>) -> Self {
+        self.user_agent = Some(user_agent.into());
+        self
+    }
+
     pub fn with_method_body(mut self, method: impl Into<String>, body: Option<String>) -> Self {
         self.method = method.into();
         self.body = body;
+        self
+    }
+
+    pub fn with_retry_statuses(mut self, retry_statuses: Vec<u16>) -> Self {
+        self.retry_statuses = retry_statuses;
         self
     }
 }
 
 impl Fetcher for HttpFetcher {
     fn fetch(&self) -> Result<String, FetchError> {
+        let request = self.request()?;
         let response = if let Some(body) = &self.body {
-            self.request().send_string(body)
+            request.send_string(body)
         } else {
-            self.request().call()
+            request.call()
         };
 
         match response {
             Ok(response) => read_body(response),
-            Err(ureq::Error::Status(status, _response)) => status_error(status),
+            Err(ureq::Error::Status(status, _response)) => {
+                status_error(status, &self.retry_statuses)
+            }
             Err(ureq::Error::Transport(err)) => {
                 Err(FetchError::retryable(format!("transport error: {err}")))
             }
@@ -123,24 +144,35 @@ impl Fetcher for HttpFetcher {
 }
 
 impl HttpFetcher {
-    fn request(&self) -> ureq::Request {
+    fn request(&self) -> Result<ureq::Request, FetchError> {
         let mut request = self.agent.request(&self.method, &self.url);
 
         for header in &self.headers {
             request = request.set(&header.name, &header.value);
         }
 
-        match &self.auth {
-            Some(AuthConfig::Basic { username, password }) => {
-                let credentials = format!("{username}:{password}");
-                let encoded = general_purpose::STANDARD.encode(credentials.as_bytes());
-                request.set("Authorization", &format!("Basic {encoded}"))
-            }
-            Some(AuthConfig::BearerToken(token)) => {
-                request.set("Authorization", &format!("Bearer {token}"))
-            }
-            None => request,
+        if let Some(user_agent) = &self.user_agent {
+            request = request.set("User-Agent", user_agent);
         }
+
+        if let Some(auth) = &self.auth {
+            let auth = resolve_explicit_auth(auth)?;
+            request = apply_auth_header(request, &auth);
+        }
+
+        Ok(request)
+    }
+}
+
+fn apply_auth_header(request: ureq::Request, auth: &AuthConfig) -> ureq::Request {
+    match auth {
+        AuthConfig::Basic { username, password } => {
+            let credentials = format!("{username}:{password}");
+            let encoded = general_purpose::STANDARD.encode(credentials.as_bytes());
+            request.set("Authorization", &format!("Basic {encoded}"))
+        }
+        AuthConfig::BearerToken(token) => request.set("Authorization", &format!("Bearer {token}")),
+        AuthConfig::BearerTokenFile(_) | AuthConfig::BearerTokenEnv(_) => request,
     }
 }
 
@@ -148,11 +180,18 @@ fn build_agent(
     timeout: Duration,
     ca_cert_path: Option<&PathBuf>,
     insecure: bool,
+    proxy: Option<&str>,
 ) -> Result<ureq::Agent, FetchError> {
-    let builder = ureq::AgentBuilder::new()
+    let mut builder = ureq::AgentBuilder::new()
         .timeout_connect(timeout)
         .timeout_read(timeout)
         .timeout_write(timeout);
+
+    if let Some(proxy_url) = proxy {
+        let proxy = ureq::Proxy::new(proxy_url)
+            .map_err(|err| FetchError::fatal(format!("invalid proxy URL '{proxy_url}': {err}")))?;
+        builder = builder.proxy(proxy);
+    }
 
     if insecure || ca_cert_path.is_some() {
         Ok(builder
@@ -160,6 +199,66 @@ fn build_agent(
             .build())
     } else {
         Ok(builder.build())
+    }
+}
+
+fn resolve_auth(
+    url: &str,
+    auth: Option<&AuthConfig>,
+    netrc: bool,
+) -> Result<Option<AuthConfig>, FetchError> {
+    if let Some(auth) = auth {
+        return resolve_explicit_auth(auth).map(Some);
+    }
+
+    if netrc {
+        return load_netrc_auth(url).map(Some);
+    }
+
+    Ok(None)
+}
+
+fn resolve_explicit_auth(auth: &AuthConfig) -> Result<AuthConfig, FetchError> {
+    match auth {
+        AuthConfig::Basic { username, password } => Ok(AuthConfig::Basic {
+            username: username.clone(),
+            password: password.clone(),
+        }),
+        AuthConfig::BearerToken(token) => Ok(AuthConfig::BearerToken(token.clone())),
+        AuthConfig::BearerTokenFile(path) => {
+            let token = fs::read_to_string(path).map_err(|err| {
+                FetchError::fatal(format!(
+                    "failed to read bearer token from {}: {err}",
+                    path.display()
+                ))
+            })?;
+
+            Ok(AuthConfig::BearerToken(clean_token(
+                &token,
+                "--token-file",
+            )?))
+        }
+        AuthConfig::BearerTokenEnv(name) => {
+            let token = env::var(name).map_err(|err| {
+                FetchError::fatal(format!(
+                    "failed to read bearer token from environment variable {name}: {err}"
+                ))
+            })?;
+
+            Ok(AuthConfig::BearerToken(clean_token(&token, "--token-env")?))
+        }
+    }
+}
+
+fn clean_token(token: &str, source: &str) -> Result<String, FetchError> {
+    let token = token.trim();
+
+    if token.is_empty() {
+        Err(FetchError::fatal(format!(
+            "{source} resolved to an empty token"
+        )))
+    } else {
+        Ok(token.to_owned())
     }
 }
 
@@ -315,18 +414,181 @@ fn read_body(response: ureq::Response) -> Result<String, FetchError> {
         .map_err(|err| FetchError::fatal(format!("failed to read response body: {err}")))
 }
 
-fn status_error(status: u16) -> Result<String, FetchError> {
+fn load_netrc_auth(url: &str) -> Result<AuthConfig, FetchError> {
+    let host = host_from_url(url)
+        .ok_or_else(|| FetchError::fatal(format!("failed to read host from URL '{url}'")))?;
+    let path = default_netrc_path()
+        .ok_or_else(|| FetchError::fatal("failed to locate home directory for .netrc"))?;
+    let content = fs::read_to_string(&path).map_err(|err| {
+        FetchError::fatal(format!(
+            "failed to read .netrc from {}: {err}",
+            path.display()
+        ))
+    })?;
+    let credentials = parse_netrc_credentials(&content, &host).ok_or_else(|| {
+        FetchError::fatal(format!("no .netrc credentials found for host '{host}'"))
+    })?;
+
+    Ok(AuthConfig::Basic {
+        username: credentials.login,
+        password: credentials.password,
+    })
+}
+
+fn default_netrc_path() -> Option<PathBuf> {
+    if cfg!(windows) {
+        env::var_os("USERPROFILE")
+            .map(PathBuf::from)
+            .map(|home| home.join("_netrc"))
+            .or_else(|| {
+                env::var_os("HOME")
+                    .map(PathBuf::from)
+                    .map(|home| home.join("_netrc"))
+            })
+    } else {
+        env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|home| home.join(".netrc"))
+    }
+}
+
+fn host_from_url(url: &str) -> Option<String> {
+    let after_scheme = url.split_once("://")?.1;
+    let authority = after_scheme.split('/').next().unwrap_or(after_scheme);
+    let host_port = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+
+    if let Some(rest) = host_port.strip_prefix('[') {
+        return rest.find(']').map(|end| rest[..end].to_owned());
+    }
+
+    let host = host_port.split(':').next().unwrap_or(host_port);
+
+    if host.is_empty() {
+        None
+    } else {
+        Some(host.to_owned())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NetrcCredentials {
+    login: String,
+    password: String,
+}
+
+fn parse_netrc_credentials(content: &str, host: &str) -> Option<NetrcCredentials> {
+    let tokens = netrc_tokens(content);
+    let mut index = 0;
+    let mut default_credentials = None;
+
+    while index < tokens.len() {
+        match tokens[index].as_str() {
+            "machine" if index + 1 < tokens.len() => {
+                let machine = &tokens[index + 1];
+                index += 2;
+                let credentials = parse_netrc_entry(&tokens, &mut index);
+
+                if machine.eq_ignore_ascii_case(host) {
+                    return credentials;
+                }
+            }
+            "default" => {
+                index += 1;
+                default_credentials = parse_netrc_entry(&tokens, &mut index);
+            }
+            _ => index += 1,
+        }
+    }
+
+    default_credentials
+}
+
+fn parse_netrc_entry(tokens: &[String], index: &mut usize) -> Option<NetrcCredentials> {
+    let mut login = None;
+    let mut password = None;
+
+    while *index < tokens.len() {
+        match tokens[*index].as_str() {
+            "machine" | "default" => break,
+            "login" if *index + 1 < tokens.len() => {
+                login = Some(tokens[*index + 1].clone());
+                *index += 2;
+            }
+            "password" if *index + 1 < tokens.len() => {
+                password = Some(tokens[*index + 1].clone());
+                *index += 2;
+            }
+            _ => *index += 1,
+        }
+    }
+
+    match (login, password) {
+        (Some(login), Some(password)) if !login.is_empty() => {
+            Some(NetrcCredentials { login, password })
+        }
+        _ => None,
+    }
+}
+
+fn netrc_tokens(content: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut in_quote = false;
+    let mut escaped = false;
+    let mut in_comment = false;
+
+    for character in content.chars() {
+        if in_comment {
+            if character == '\n' {
+                in_comment = false;
+            }
+            continue;
+        }
+
+        if escaped {
+            current.push(character);
+            escaped = false;
+            continue;
+        }
+
+        match character {
+            '\\' if in_quote => escaped = true,
+            '"' => in_quote = !in_quote,
+            '#' if !in_quote => {
+                push_netrc_token(&mut tokens, &mut current);
+                in_comment = true;
+            }
+            value if value.is_whitespace() && !in_quote => {
+                push_netrc_token(&mut tokens, &mut current);
+            }
+            value => current.push(value),
+        }
+    }
+
+    push_netrc_token(&mut tokens, &mut current);
+    tokens
+}
+
+fn push_netrc_token(tokens: &mut Vec<String>, current: &mut String) {
+    if !current.is_empty() {
+        tokens.push(std::mem::take(current));
+    }
+}
+
+fn status_error(status: u16, retry_statuses: &[u16]) -> Result<String, FetchError> {
     let message = format!("HTTP status {status}");
 
-    if should_retry_status(status) {
+    if should_retry_status(status, retry_statuses) {
         Err(FetchError::retryable(message))
     } else {
         Err(FetchError::fatal(message))
     }
 }
 
-fn should_retry_status(status: u16) -> bool {
-    (500..=599).contains(&status)
+fn should_retry_status(status: u16, retry_statuses: &[u16]) -> bool {
+    (500..=599).contains(&status) || retry_statuses.contains(&status)
 }
 
 #[cfg(test)]
@@ -335,13 +597,60 @@ mod tests {
 
     #[test]
     fn retries_server_errors() {
-        assert!(should_retry_status(500));
-        assert!(should_retry_status(503));
+        assert!(should_retry_status(500, &[]));
+        assert!(should_retry_status(503, &[]));
     }
 
     #[test]
     fn does_not_retry_auth_errors() {
-        assert!(!should_retry_status(401));
-        assert!(!should_retry_status(403));
+        assert!(!should_retry_status(401, &[]));
+        assert!(!should_retry_status(403, &[]));
+    }
+
+    #[test]
+    fn retries_configured_statuses() {
+        assert!(should_retry_status(429, &[429]));
+        assert!(!should_retry_status(404, &[429]));
+    }
+
+    #[test]
+    fn parses_machine_credentials_from_netrc() {
+        let content = r#"
+            machine example.com login alice password "secret value"
+            default login guest password guest-pass
+        "#;
+
+        assert_eq!(
+            parse_netrc_credentials(content, "example.com"),
+            Some(NetrcCredentials {
+                login: "alice".to_owned(),
+                password: "secret value".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_default_credentials_from_netrc() {
+        let content = "default login guest password guest-pass";
+
+        assert_eq!(
+            parse_netrc_credentials(content, "example.com"),
+            Some(NetrcCredentials {
+                login: "guest".to_owned(),
+                password: "guest-pass".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn extracts_host_from_url() {
+        assert_eq!(
+            host_from_url("https://example.com:8443/logs"),
+            Some("example.com".to_owned())
+        );
+        assert_eq!(
+            host_from_url("http://user@example.org/logs"),
+            Some("example.org".to_owned())
+        );
     }
 }
