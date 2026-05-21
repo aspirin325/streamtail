@@ -106,6 +106,7 @@ src/renderer/        Text and JSON Lines output
 src/retry/           Retry limits and exponential backoff
 tests/               Integration tests
 docs/                Product spec, architecture, roadmap, and testing notes
+docs/releases.md     Release, package, and install guide
 docs/man/            Manual pages
 .github/workflows/   CI and release automation
 ```
@@ -124,75 +125,9 @@ Pull requests run the same gates expected before merge:
 - dependency advisory, license, ban, and source checks with `cargo-deny`
 - CodeQL Rust analysis
 
-## Releases
+## Releases And Packages
 
-The package uses SemVer. Release tags should use the recommended GitHub release
-format `vMAJOR.MINOR.PATCH`, for example `v0.1.0`.
-
-Pushing a matching tag starts the release workflow:
-
-```sh
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-GitHub Actions builds release binaries inside Red Hat UBI 8 and Oracle Linux 8
-containers, and inside Debian 12 and Ubuntu 24.04 containers. It publishes:
-
-- binary tarballs
-- RPM packages for Red Hat and Oracle Linux
-- DEB packages for Debian and Ubuntu
-- SHA-256 checksum files
-- SPDX JSON SBOM files
-- GitHub artifact attestations for release provenance
-
-Download the package that matches your system from the GitHub release page:
-
-- Red Hat / RHEL-compatible: `streamtail-v0.1.0-x86_64-redhat-ubi8-linux-gnu.rpm`
-- Oracle Linux: `streamtail-v0.1.0-x86_64-oraclelinux8-linux-gnu.rpm`
-- Debian 12: `streamtail-v0.1.0-x86_64-debian12-linux-gnu.deb`
-- Ubuntu 24.04: `streamtail-v0.1.0-x86_64-ubuntu2404-linux-gnu.deb`
-
-Install on Red Hat or RHEL-compatible systems:
-
-```sh
-sudo dnf install ./streamtail-v0.1.0-x86_64-redhat-ubi8-linux-gnu.rpm
-streamtail --help
-man streamtail
-```
-
-Install on Oracle Linux:
-
-```sh
-sudo dnf install ./streamtail-v0.1.0-x86_64-oraclelinux8-linux-gnu.rpm
-streamtail --help
-man streamtail
-```
-
-Install on Debian:
-
-```sh
-sudo apt install ./streamtail-v0.1.0-x86_64-debian12-linux-gnu.deb
-streamtail --help
-man streamtail
-```
-
-Install on Ubuntu:
-
-```sh
-sudo apt install ./streamtail-v0.1.0-x86_64-ubuntu2404-linux-gnu.deb
-streamtail --help
-man streamtail
-```
-
-Verify a downloaded tarball or package:
-
-```sh
-sha256sum -c streamtail-v0.1.0-x86_64-redhat-ubi8-linux-gnu.rpm.sha256
-gh attestation verify streamtail-v0.1.0-x86_64-redhat-ubi8-linux-gnu.rpm \
-  --repo aspirin325/streamtail
-
-sha256sum -c streamtail-v0.1.0-x86_64-redhat-ubi8-linux-gnu.tar.gz.sha256
-gh attestation verify streamtail-v0.1.0-x86_64-redhat-ubi8-linux-gnu.tar.gz \
-  --repo aspirin325/streamtail
-```
+Release artifacts include Linux binary tarballs, RPM packages, DEB packages,
+checksums, SPDX SBOMs, and GitHub artifact attestations. See
+[`docs/releases.md`](docs/releases.md) for installation commands, verification
+steps, and the maintainer release checklist.
