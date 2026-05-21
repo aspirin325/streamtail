@@ -4,8 +4,10 @@ use std::{
     io,
     io::Write,
     thread,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+
+use regex::Regex;
 
 use crate::{
     cli::Config,
@@ -20,6 +22,7 @@ pub enum AppError {
     Fetch(FetchError),
     OutputIo(io::Error),
     LogIo(io::Error),
+    InvalidExitPattern(regex::Error),
     MissingLogPath,
 }
 
@@ -29,6 +32,9 @@ impl fmt::Display for AppError {
             Self::Fetch(err) => write!(formatter, "{err}"),
             Self::OutputIo(err) => write!(formatter, "failed to write output: {err}"),
             Self::LogIo(err) => write!(formatter, "failed to write debug log: {err}"),
+            Self::InvalidExitPattern(err) => {
+                write!(formatter, "invalid --exit-on-match regex: {err}")
+            }
             Self::MissingLogPath => write!(formatter, "--debug requires --log <PATH>"),
         }
     }
@@ -43,12 +49,21 @@ impl From<FetchError> for AppError {
 }
 
 pub fn run(config: Config) -> Result<(), AppError> {
-    let fetcher =
-        HttpFetcher::new(config.url.clone(), config.timeout).with_auth(config.auth.clone());
-    let stdout = io::stdout();
-    let mut handle = stdout.lock();
+    let fetcher = HttpFetcher::from_config(&config)?;
 
-    run_with(fetcher, &mut handle, &config)
+    if let Some(path) = &config.output_path {
+        let mut file = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(path)
+            .map_err(AppError::OutputIo)?;
+        run_with(fetcher, &mut file, &config)
+    } else {
+        let stdout = io::stdout();
+        let mut handle = stdout.lock();
+        run_with(fetcher, &mut handle, &config)
+    }
 }
 
 pub fn run_with<F, W>(fetcher: F, writer: &mut W, config: &Config) -> Result<(), AppError>
@@ -60,16 +75,23 @@ where
     let mut renderer = Renderer::new(writer, output_mode(config));
     let mut consecutive_failures = 0_u32;
     let mut fetch_attempts = 0_u64;
+    let mut emitted_events = 0_u64;
     let backoff = Backoff::default();
     let mut logger = DebugLogger::open(config)?;
+    let exit_on_match = match &config.exit_on_match {
+        Some(pattern) => Some(Regex::new(pattern).map_err(AppError::InvalidExitPattern)?),
+        None => None,
+    };
+    let started_at = Instant::now();
 
     log_debug(&mut logger, "debug logging enabled")?;
     log_debug(
         &mut logger,
         format!(
-            "streamtail {} started; url={}; interval={:?}; timeout={:?}; once={}; json={}; auth={}",
+            "streamtail {} started; url={}; method={}; interval={:?}; timeout={:?}; once={}; json={}; auth={}",
             env!("CARGO_PKG_VERSION"),
             config.url,
+            config.method,
             config.interval,
             config.timeout,
             config.once,
@@ -93,11 +115,15 @@ where
             Ok(body) => {
                 consecutive_failures = 0;
                 let change = emit_change(&mut diff_engine, &mut renderer, &body)?;
+                if change.text.is_some() {
+                    emitted_events = emitted_events.saturating_add(1);
+                }
                 log_debug(
                     &mut logger,
                     format!(
-                        "fetch attempt {fetch_attempts} succeeded; bytes={}; change={change}",
-                        body.len()
+                        "fetch attempt {fetch_attempts} succeeded; bytes={}; change={}; emitted_events={emitted_events}",
+                        body.len(),
+                        change.kind
                     ),
                 )?;
 
@@ -105,12 +131,40 @@ where
                     log_debug(&mut logger, "exiting after --once fetch")?;
                     return Ok(());
                 }
+                if let Some(text) = &change.text {
+                    if let Some(pattern) = &exit_on_match {
+                        if pattern.is_match(text) {
+                            log_debug(
+                                &mut logger,
+                                "exiting because --exit-on-match matched emitted output",
+                            )?;
+                            return Ok(());
+                        }
+                    }
+                }
+                if config
+                    .max_events
+                    .is_some_and(|limit| emitted_events >= limit)
+                {
+                    log_debug(&mut logger, "exiting after --max-events limit")?;
+                    return Ok(());
+                }
+                if max_duration_reached(config.max_duration, started_at) {
+                    log_debug(&mut logger, "exiting after --max-duration limit")?;
+                    return Ok(());
+                }
+
+                let sleep_for = sleep_duration(config.interval, config.max_duration, started_at);
+                if sleep_for.is_zero() {
+                    log_debug(&mut logger, "exiting after --max-duration limit")?;
+                    return Ok(());
+                }
 
                 log_debug(
                     &mut logger,
-                    format!("sleeping for {:?} before next poll", config.interval),
+                    format!("sleeping for {sleep_for:?} before next poll"),
                 )?;
-                thread::sleep(config.interval);
+                thread::sleep(sleep_for);
             }
             Err(err)
                 if err.is_retryable() && config.retry_limit.allows_retry(consecutive_failures) =>
@@ -136,6 +190,22 @@ where
     }
 }
 
+fn max_duration_reached(max_duration: Option<Duration>, started_at: Instant) -> bool {
+    max_duration.is_some_and(|limit| started_at.elapsed() >= limit)
+}
+
+fn sleep_duration(
+    interval: Duration,
+    max_duration: Option<Duration>,
+    started_at: Instant,
+) -> Duration {
+    match max_duration.and_then(|limit| limit.checked_sub(started_at.elapsed())) {
+        Some(remaining) => interval.min(remaining),
+        None if max_duration.is_some() => Duration::ZERO,
+        None => interval,
+    }
+}
+
 fn output_mode(config: &Config) -> OutputMode {
     if config.json {
         OutputMode::Json
@@ -148,20 +218,36 @@ fn emit_change<W>(
     diff_engine: &mut DiffEngine,
     renderer: &mut Renderer<W>,
     body: &str,
-) -> Result<&'static str, AppError>
+) -> Result<EmittedChange, AppError>
 where
     W: Write,
 {
     match diff_engine.update(body) {
-        Change::Unchanged => Ok("unchanged"),
+        Change::Unchanged => Ok(EmittedChange {
+            kind: "unchanged",
+            text: None,
+        }),
         Change::Appended(text) => {
             renderer.emit(&text).map_err(AppError::OutputIo)?;
-            Ok("appended")
+            Ok(EmittedChange::new("appended", text))
         }
         Change::Reset(text) => {
             renderer.emit(&text).map_err(AppError::OutputIo)?;
-            Ok("reset")
+            Ok(EmittedChange::new("reset", text))
         }
+    }
+}
+
+struct EmittedChange {
+    kind: &'static str,
+    text: Option<String>,
+}
+
+impl EmittedChange {
+    fn new(kind: &'static str, text: String) -> Self {
+        let text = if text.is_empty() { None } else { Some(text) };
+
+        Self { kind, text }
     }
 }
 
@@ -246,7 +332,16 @@ mod tests {
             json: false,
             debug: false,
             log_path: None,
+            output_path: None,
             auth: None,
+            method: "GET".to_owned(),
+            body: None,
+            headers: Vec::new(),
+            ca_cert_path: None,
+            insecure: false,
+            exit_on_match: None,
+            max_events: None,
+            max_duration: None,
         }
     }
 
@@ -294,6 +389,44 @@ mod tests {
         assert!(log.contains("debug logging enabled"));
         assert!(log.contains("fetch attempt 1 succeeded"));
         assert!(log.contains("change=appended"));
+    }
+
+    #[test]
+    fn exits_when_emitted_output_matches_pattern() {
+        let fetcher = SequenceFetcher::new(vec![Ok("ready".to_owned()), Ok("later".to_owned())]);
+        let mut config = test_config();
+        config.once = false;
+        config.exit_on_match = Some("ready".to_owned());
+        let mut output = Vec::new();
+
+        run_with(fetcher, &mut output, &config).expect("run should succeed");
+
+        assert_eq!(output, b"ready");
+    }
+
+    #[test]
+    fn exits_after_max_events() {
+        let fetcher = SequenceFetcher::new(vec![Ok("one".to_owned()), Ok("onetwo".to_owned())]);
+        let mut config = test_config();
+        config.once = false;
+        config.max_events = Some(2);
+        let mut output = Vec::new();
+
+        run_with(fetcher, &mut output, &config).expect("run should succeed");
+
+        assert_eq!(output, b"onetwo");
+    }
+
+    #[test]
+    fn rejects_invalid_exit_pattern() {
+        let fetcher = SequenceFetcher::new(vec![Ok("hello".to_owned())]);
+        let mut config = test_config();
+        config.exit_on_match = Some("[".to_owned());
+        let mut output = Vec::new();
+
+        let error = run_with(fetcher, &mut output, &config).expect_err("regex should fail");
+
+        assert!(matches!(error, AppError::InvalidExitPattern(_)));
     }
 
     fn unique_log_path() -> std::path::PathBuf {

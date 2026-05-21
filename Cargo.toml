@@ -12,7 +12,9 @@ categories = ["command-line-utilities"]
 
 [dependencies]
 base64 = "0.22"
+regex = "1"
 ureq = { version = "2.12", default-features = true }
+webpki-roots = "0.26"
 
 [package.metadata.deb]
 maintainer = "aspirin325 <aspirin325@users.noreply.github.com>"

@@ -13,6 +13,21 @@ It is intended for terminal and pipe workflows where a remote endpoint behaves
 like an append-only log, status feed, or simple text stream.
 .SH OPTIONS
 .TP
+.BR \-\-method " " \fIMETHOD\fR
+HTTP method to use. The default is
+.BR GET ,
+or
+.B POST
+when
+.BR \-\-body
+is provided without an explicit method.
+.TP
+.BR \-\-body " " \fITEXT\fR
+Request body to send.
+.TP
+.BR \-\-header " " \fINAME:VALUE\fR
+Add an HTTP header. This option may be repeated.
+.TP
 .BR \-i ", " \-\-interval " " \fIDURATION\fR
 Polling interval. Durations support suffixes such as
 .BR ms ,
@@ -37,6 +52,20 @@ Emit each update as a JSON Lines record with a
 .B data
 field.
 .TP
+.BR \-\-output " " \fIPATH\fR
+Write stream output to a file instead of standard output.
+.TP
+.BR \-\-exit-on-match " " \fIREGEX\fR
+Exit successfully after emitted output matches a regular expression.
+.TP
+.BR \-\-max-events " " \fIN\fR
+Exit successfully after emitting
+.I N
+updates.
+.TP
+.BR \-\-max-duration " " \fIDURATION\fR
+Exit successfully after the total runtime reaches the duration.
+.TP
 .BR \-\-debug
 Write debug logging to the file selected with
 .BR \-\-log .
@@ -45,6 +74,13 @@ This option requires
 .TP
 .BR \-\-log " " \fIPATH\fR
 Debug log output file.
+.TP
+.BR \-\-ca-cert " " \fIPATH\fR
+Add PEM or DER CA certificate roots for TLS verification.
+.TP
+.BR \-\-insecure
+Disable TLS certificate verification. This is intended only for local testing
+or trusted internal networks.
 .TP
 .BR \-\-basic-auth " " \fIUSER:PASSWORD\fR
 Send HTTP Basic authentication credentials.
@@ -89,6 +125,18 @@ Use bearer token authentication:
 .TP
 Write debug logs:
 .B streamtail https://example.com/logs --debug --log streamtail.log
+.TP
+Add a custom header and save output:
+.B streamtail https://example.com/logs --header "X-Env: prod" --output logs.txt
+.TP
+Exit when output matches:
+.B streamtail https://example.com/logs --exit-on-match "deploy complete"
+.TP
+Send a POST body:
+.B streamtail https://example.com/query --method POST --body '{"service":"api"}'
+.TP
+Use a custom CA certificate:
+.B streamtail https://internal.example/logs --ca-cert ./internal-ca.pem
 .SH NOTES
 HTTP 5xx responses and transport failures are retryable. HTTP 401 and 403
 responses are fatal.

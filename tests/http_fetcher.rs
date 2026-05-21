@@ -1,13 +1,14 @@
 use std::{
     io::{Read, Write},
     net::TcpListener,
+    path::PathBuf,
     sync::mpsc::{self, Receiver},
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use streamtail::{
-    cli::AuthConfig,
+    cli::{self, AuthConfig, CliCommand, HeaderConfig},
     fetcher::{Fetcher, HttpFetcher},
 };
 
@@ -25,9 +26,21 @@ fn serve_once_with_request(status: u16, body: &str) -> (String, Receiver<String>
 
     let handle = thread::spawn(move || {
         if let Ok((mut stream, _peer)) = listener.accept() {
+            let _timeout = stream.set_read_timeout(Some(Duration::from_millis(100)));
             let mut buffer = [0_u8; 1024];
-            let read = stream.read(&mut buffer).unwrap_or(0);
-            let request = String::from_utf8_lossy(&buffer[..read]).into_owned();
+            let mut request_bytes = Vec::new();
+
+            while let Ok(read) = stream.read(&mut buffer) {
+                if read == 0 {
+                    break;
+                }
+                request_bytes.extend_from_slice(&buffer[..read]);
+                if read < buffer.len() {
+                    break;
+                }
+            }
+
+            let request = String::from_utf8_lossy(&request_bytes).into_owned();
             let _send = request_sender.send(request);
             let response = format!(
                 "HTTP/1.1 {status} {reason}\r\nContent-Length: {length}\r\nConnection: close\r\n\r\n{body}",
@@ -113,4 +126,68 @@ fn fetcher_sends_bearer_token_header() {
 
     assert_eq!(body, "hello");
     assert!(request.contains("Authorization: Bearer abc123"));
+}
+
+#[test]
+fn fetcher_sends_method_headers_and_body() {
+    let (url, requests, handle) = serve_once_with_request(200, "hello");
+    let fetcher = HttpFetcher::new(url, Duration::from_secs(2))
+        .with_method_body("POST", Some("{\"ok\":true}".to_owned()))
+        .with_headers(vec![
+            HeaderConfig {
+                name: "Content-Type".to_owned(),
+                value: "application/json".to_owned(),
+            },
+            HeaderConfig {
+                name: "X-Test".to_owned(),
+                value: "yes".to_owned(),
+            },
+        ]);
+
+    let body = fetcher.fetch().expect("fetch should succeed");
+    handle.join().expect("server thread should finish");
+    let request = requests.recv().expect("request should be captured");
+
+    assert_eq!(body, "hello");
+    assert!(request.starts_with("POST /logs HTTP/1.1"));
+    assert!(request.contains("Content-Type: application/json"));
+    assert!(request.contains("X-Test: yes"));
+    assert!(request.contains("{\"ok\":true}"));
+}
+
+#[test]
+fn run_writes_stream_output_to_configured_file() {
+    let (url, handle) = serve_once(200, "hello");
+    let output_path = unique_output_path();
+    let command = cli::parse_args([
+        "--once".to_owned(),
+        "--output".to_owned(),
+        output_path.display().to_string(),
+        url,
+    ])
+    .expect("valid args");
+
+    let CliCommand::Run(config) = command else {
+        panic!("expected run command");
+    };
+
+    streamtail::run(*config).expect("run should succeed");
+    handle.join().expect("server thread should finish");
+
+    let output = std::fs::read_to_string(&output_path).expect("output should be readable");
+    let _ = std::fs::remove_file(&output_path);
+
+    assert_eq!(output, "hello");
+}
+
+fn unique_output_path() -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock should be valid")
+        .as_nanos();
+
+    std::env::temp_dir().join(format!(
+        "streamtail-output-test-{}-{nanos}.txt",
+        std::process::id()
+    ))
 }

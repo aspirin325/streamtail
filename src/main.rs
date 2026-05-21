@@ -13,7 +13,7 @@ fn main() {
             println!("streamtail {}", env!("CARGO_PKG_VERSION"));
         }
         Ok(CliCommand::Run(config)) => {
-            if let Err(err) = streamtail::run(config) {
+            if let Err(err) = streamtail::run(*config) {
                 eprintln!("streamtail: {err}");
                 process::exit(1);
             }
