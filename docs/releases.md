@@ -15,6 +15,11 @@ The tag version and `Cargo.toml` package version should match. For tag `v0.1.0`,
 version = "0.1.0"
 ```
 
+This matters because the compiled `streamtail --version` output and RPM/DEB
+package metadata come from `Cargo.toml`, not from the Git tag. The release
+workflow fails before building if the tag version and `Cargo.toml` version do
+not match.
+
 ## Release Artifacts
 
 The release workflow runs for tags matching `v*.*.*`. It builds Linux artifacts
@@ -189,10 +194,25 @@ cargo test --locked --all-targets --all-features
 
 ## Maintainer Release Checklist
 
-1. Update `Cargo.toml` to the new SemVer version without the leading `v`.
-2. Update `Cargo.lock` if Cargo changes the package metadata.
-3. Update `CHANGELOG.md` with the release notes.
-4. Run the local checks:
+1. Run the `Prepare Release` workflow from GitHub Actions with the new SemVer
+   version without the leading `v`, for example `0.2.0`.
+2. Review the generated pull request. It updates `Cargo.toml`, refreshes
+   `Cargo.lock`, and updates the man page version.
+3. Update `CHANGELOG.md` in that pull request with the release notes.
+4. Let pull request CI pass, then merge the release preparation pull request.
+5. Tag the merge commit with the matching `vMAJOR.MINOR.PATCH` tag.
+
+If preparing the release manually instead, update `Cargo.toml` to the new SemVer
+version without the leading `v`. This is the version shown by
+`streamtail --version` and embedded in package metadata. Refresh `Cargo.lock`
+and update `CHANGELOG.md` before tagging.
+
+The `Prepare Release` workflow uses the default `GITHUB_TOKEN` unless a
+`RELEASE_PR_TOKEN` secret exists. Use that optional secret for a fine-scoped
+GitHub token if your repository settings require PRs created by automation to
+trigger pull request CI automatically.
+
+Run the local checks before tagging:
 
 ```sh
 cargo fmt --all -- --check
@@ -201,16 +221,14 @@ cargo test --locked --all-targets --all-features
 cargo build --locked --release --bin streamtail
 ```
 
-5. Create and push the release tag:
+Create and push the release tag:
 
 ```sh
 git tag -a v0.1.0 -m "streamtail v0.1.0"
 git push origin v0.1.0
 ```
 
-6. Wait for the `Release` workflow to finish.
-7. Confirm the GitHub release contains tarballs, the Windows ZIP, RPMs, DEBs,
-   checksums, SPDX SBOMs, Sigstore attestation bundles, and generated release
-   notes.
-8. Download one Linux package and the Windows ZIP, then verify their checksums
-   and GitHub attestations.
+Wait for the `Release` workflow to finish, then confirm the GitHub release
+contains tarballs, the Windows ZIP, RPMs, DEBs, checksums, SPDX SBOMs, Sigstore
+attestation bundles, and generated release notes. Download one Linux package
+and the Windows ZIP, then verify their checksums and GitHub attestations.

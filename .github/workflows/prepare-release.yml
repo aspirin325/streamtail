@@ -1,0 +1,151 @@
+name: Prepare Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "SemVer version without a leading v, for example 0.2.0"
+        required: true
+        type: string
+      base_branch:
+        description: "Branch to open the release preparation PR against"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: prepare-release-${{ inputs.version }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  prepare:
+    name: Prepare release PR
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Prepare release files
+        id: prepare
+        env:
+          VERSION: ${{ inputs.version }}
+          BASE_BRANCH_INPUT: ${{ inputs.base_branch }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Version must use SemVer format MAJOR.MINOR.PATCH, for example 0.2.0."
+            exit 1
+          fi
+
+          tag="v${VERSION}"
+          base_branch="${BASE_BRANCH_INPUT:-${DEFAULT_BRANCH}}"
+          if [[ -z "${base_branch}" ]]; then
+            base_branch="$(git remote show origin | sed -n '/HEAD branch/s/.*: //p')"
+          fi
+          branch="release/prepare-${tag}"
+
+          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
+            echo "Tag ${tag} already exists. Choose a new version."
+            exit 1
+          fi
+
+          git fetch origin "${base_branch}"
+          git checkout -B "${base_branch}" "origin/${base_branch}"
+          git checkout -B "${branch}"
+
+          if ! awk -v version="${VERSION}" '
+            BEGIN { in_package = 0; updated = 0 }
+            /^\[package\]$/ { in_package = 1 }
+            /^\[/ && $0 != "[package]" { if (in_package) in_package = 0 }
+            in_package && /^version = / && !updated {
+              print "version = \"" version "\""
+              updated = 1
+              next
+            }
+            { print }
+            END { if (!updated) exit 42 }
+          ' Cargo.toml > Cargo.toml.tmp; then
+            echo "Could not update Cargo.toml package version."
+            rm -f Cargo.toml.tmp
+            exit 1
+          fi
+
+          mv Cargo.toml.tmp Cargo.toml
+          cargo generate-lockfile
+
+          release_date="$(date -u '+%B %-d, %Y')"
+          sed -i -E "1s/\"[A-Za-z]+ [0-9]{1,2}, [0-9]{4}\" \"streamtail [^\"]+\"/\"${release_date}\" \"streamtail ${VERSION}\"/" docs/man/streamtail.1
+
+          cargo fmt --all -- --check
+          cargo check --locked --all-targets --all-features
+
+          if git diff --quiet; then
+            echo "No release preparation changes were needed."
+            exit 1
+          fi
+
+          {
+            echo "version=${VERSION}"
+            echo "tag=${tag}"
+            echo "base_branch=${base_branch}"
+            echo "branch=${branch}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Open release preparation PR
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN || github.token }}
+          VERSION: ${{ steps.prepare.outputs.version }}
+          TAG: ${{ steps.prepare.outputs.tag }}
+          BASE_BRANCH: ${{ steps.prepare.outputs.base_branch }}
+          BRANCH: ${{ steps.prepare.outputs.branch }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock docs/man/streamtail.1
+          git commit -m "Prepare release ${TAG}"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push --force-with-lease origin "${BRANCH}"
+
+          existing_pr="$(gh pr list --head "${BRANCH}" --base "${BASE_BRANCH}" --json url --jq '.[0].url')"
+          if [[ -n "${existing_pr}" ]]; then
+            echo "Release preparation PR already exists: ${existing_pr}"
+            exit 0
+          fi
+
+          pr_body="$(mktemp)"
+          cat > "${pr_body}" <<EOF
+          ## Release preparation
+
+          - Bumps Cargo package version to \`${VERSION}\`
+          - Refreshes \`Cargo.lock\`
+          - Updates the man page version
+
+          Before merging:
+
+          - [ ] Confirm \`CHANGELOG.md\` has release notes for \`${TAG}\`
+          - [ ] Let pull request CI pass
+
+          After merging:
+
+          - Tag the merge commit with \`${TAG}\` and push the tag to trigger the release workflow
+          EOF
+
+          gh pr create \
+            --base "${BASE_BRANCH}" \
+            --head "${BRANCH}" \
+            --title "Prepare release ${TAG}" \
+            --body-file "${pr_body}"
