@@ -47,6 +47,9 @@ streamtail https://example.com/logs \
   --debug --log streamtail.log
 
 streamtail https://example.com/logs \
+  --color cyan
+
+streamtail https://example.com/logs \
   -f \
   --header "X-Env: prod" \
   --output logs.txt
@@ -85,6 +88,8 @@ streamtail https://internal.example/logs \
 - Start from the end of the initial snapshot when requested
 - Stop automatically on output matches, event counts, or runtime limits
 - Write stream output to a user-selected file, replacing or appending
+- Color terminal text output when requested without writing color escape codes
+  to output files
 - Write optional debug logs to a user-selected file
 
 ## Non-goals
@@ -111,6 +116,8 @@ streamtail https://internal.example/logs \
 - TLS configuration with `--ca-cert <PATH>` and `--insecure`
 - Output redirection with `--output <PATH>` and append mode with
   `--append-output`
+- Terminal text color with `--color <COLOR>` and explicit plain output with
+  `--no-color`
 - Initial snapshot skipping with `--follow-from-end` / `-f`
 - Exit conditions with `--exit-on-match <REGEX>`, `--max-events <N>`, and
   `--max-duration <DURATION>`

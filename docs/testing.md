@@ -24,6 +24,12 @@ Should not retry:
 - 401
 - 403
 
+## Color output
+
+`--color` should add ANSI color codes only to text output written to standard
+output. JSON Lines output and files selected with `--output` should remain
+plain and parseable.
+
 ## Follow from end
 
 Given the first response:

@@ -1,6 +1,6 @@
 use std::{fmt, path::PathBuf, time::Duration};
 
-use crate::retry::RetryLimit;
+use crate::{color::Color, retry::RetryLimit};
 
 const DEFAULT_INTERVAL: Duration = Duration::from_secs(2);
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -20,6 +20,7 @@ pub struct Config {
     pub once: bool,
     pub follow_from_end: bool,
     pub json: bool,
+    pub color: Option<Color>,
     pub debug: bool,
     pub log_path: Option<PathBuf>,
     pub output_path: Option<PathBuf>,
@@ -79,9 +80,11 @@ pub enum CliError {
     InvalidMethod(String),
     InvalidNumber(String),
     InvalidStatusCode(String),
+    InvalidColor(String),
     ZeroDuration(String),
     MissingRequiredFlag { flag: String, required: String },
     ConflictingAuthFlags,
+    ConflictingColorFlags,
 }
 
 impl fmt::Display for CliError {
@@ -106,6 +109,10 @@ impl fmt::Display for CliError {
             Self::InvalidStatusCode(value) => {
                 write!(formatter, "invalid HTTP status code '{value}'")
             }
+            Self::InvalidColor(value) => write!(
+                formatter,
+                "invalid color '{value}', expected black, red, green, yellow, blue, magenta, cyan, white, or bright-*"
+            ),
             Self::ZeroDuration(flag) => write!(formatter, "{flag} must be greater than zero"),
             Self::MissingRequiredFlag { flag, required } => {
                 write!(formatter, "{flag} requires {required}")
@@ -115,6 +122,9 @@ impl fmt::Display for CliError {
                     formatter,
                     "only one authentication source can be used at a time"
                 )
+            }
+            Self::ConflictingColorFlags => {
+                write!(formatter, "--color and --no-color cannot be used together")
             }
         }
     }
@@ -141,6 +151,8 @@ where
     let mut once = false;
     let mut follow_from_end = false;
     let mut json = false;
+    let mut color = None;
+    let mut no_color = false;
     let mut debug = false;
     let mut log_path = None;
     let mut output_path = None;
@@ -174,6 +186,8 @@ where
             "--once" => once = true,
             "-f" | "--follow-from-end" => follow_from_end = true,
             "--json" => json = true,
+            "--color" => color = Some(parse_color(&next_value(&mut args, &arg)?)?),
+            "--no-color" => no_color = true,
             "--debug" => debug = true,
             "--log" => log_path = Some(PathBuf::from(next_value(&mut args, &arg)?)),
             "--output" => output_path = Some(PathBuf::from(next_value(&mut args, &arg)?)),
@@ -231,6 +245,9 @@ where
     if netrc && auth.is_some() {
         return Err(CliError::ConflictingAuthFlags);
     }
+    if no_color && color.is_some() {
+        return Err(CliError::ConflictingColorFlags);
+    }
     if body.is_some() && !method_was_set {
         method = "POST".to_owned();
     }
@@ -251,6 +268,7 @@ where
         once,
         follow_from_end,
         json,
+        color,
         debug,
         log_path,
         output_path,
@@ -289,6 +307,8 @@ OPTIONS:
         --once                    Fetch once and exit
     -f, --follow-from-end         Start after the first fetched snapshot
         --json                    Emit each update as a JSON line
+        --color <COLOR>           Color text output on stdout
+        --no-color                Disable terminal color formatting
         --output <PATH>           Write stream output to a file instead of stdout
         --append-output           Append to --output instead of replacing it
         --exit-on-match <REGEX>   Exit after emitted output matches a regex
@@ -348,6 +368,10 @@ fn parse_status_code(value: &str) -> Result<u16, CliError> {
         Ok(status) if (100..=599).contains(&status) => Ok(status),
         _ => Err(CliError::InvalidStatusCode(value.to_owned())),
     }
+}
+
+fn parse_color(value: &str) -> Result<Color, CliError> {
+    Color::parse(value).ok_or_else(|| CliError::InvalidColor(value.to_owned()))
 }
 
 fn set_auth(auth: &mut Option<AuthConfig>, value: AuthConfig) -> Result<(), CliError> {
@@ -484,6 +508,7 @@ mod tests {
                 assert_eq!(config.retry_limit, RetryLimit::Unlimited);
                 assert_eq!(config.retry_statuses, Vec::new());
                 assert!(!config.follow_from_end);
+                assert_eq!(config.color, None);
                 assert!(!config.debug);
                 assert_eq!(config.log_path, None);
                 assert_eq!(config.output_path, None);
@@ -536,6 +561,8 @@ mod tests {
             "--once",
             "--follow-from-end",
             "--json",
+            "--color",
+            "bright-cyan",
             "--output",
             "streamtail.out",
             "--append-output",
@@ -581,6 +608,7 @@ mod tests {
                 assert!(config.once);
                 assert!(config.follow_from_end);
                 assert!(config.json);
+                assert_eq!(config.color, Some(Color::BrightCyan));
                 assert!(config.debug);
                 assert_eq!(config.log_path, Some(PathBuf::from("streamtail.log")));
                 assert_eq!(config.output_path, Some(PathBuf::from("streamtail.out")));
@@ -634,6 +662,22 @@ mod tests {
         assert_eq!(
             parse(&["--retry-status", "99", "http://localhost"]),
             Err(CliError::InvalidStatusCode("99".to_owned()))
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_color() {
+        assert_eq!(
+            parse(&["--color", "orange", "http://localhost"]),
+            Err(CliError::InvalidColor("orange".to_owned()))
+        );
+    }
+
+    #[test]
+    fn rejects_conflicting_color_flags() {
+        assert_eq!(
+            parse(&["--color", "red", "--no-color", "http://localhost"]),
+            Err(CliError::ConflictingColorFlags)
         );
     }
 

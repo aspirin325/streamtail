@@ -2,6 +2,7 @@
 
 pub mod app;
 pub mod cli;
+pub mod color;
 pub mod diff;
 pub mod fetcher;
 pub mod renderer;

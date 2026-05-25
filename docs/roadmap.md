@@ -8,8 +8,6 @@
 
 ## Phase 2
 - SSE support
-- JSON mode
-- Colored output
 
 ## Phase 3
 - WebSocket support
