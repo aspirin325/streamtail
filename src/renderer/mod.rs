@@ -22,13 +22,17 @@ where
     }
 
     pub fn emit(&mut self, text: &str) -> io::Result<()> {
+        self.emit_with_color(text, None)
+    }
+
+    pub fn emit_with_color(&mut self, text: &str, color_override: Option<Color>) -> io::Result<()> {
         if text.is_empty() {
             return Ok(());
         }
 
         match self.mode {
             OutputMode::Text { color } => {
-                if let Some(color) = color {
+                if let Some(color) = color_override.or(color) {
                     write!(self.writer, "\x1b[{}m", color.ansi_code())?;
                     self.writer.write_all(text.as_bytes())?;
                     self.writer.write_all(b"\x1b[0m")?;
