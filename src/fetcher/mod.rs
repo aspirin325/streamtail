@@ -7,7 +7,7 @@ use std::{
 
 use base64::{engine::general_purpose, Engine as _};
 
-use crate::cli::{AuthConfig, Config, HeaderConfig};
+use crate::cli::{AuthConfig, Config, HeaderConfig, SourceConfig};
 
 pub trait Fetcher {
     fn fetch(&self) -> Result<String, FetchError>;
@@ -75,17 +75,25 @@ impl HttpFetcher {
     }
 
     pub fn from_config(config: &Config) -> Result<Self, FetchError> {
+        let source = config
+            .sources
+            .first()
+            .ok_or_else(|| FetchError::fatal("missing URL"))?;
+        Self::from_config_source(config, source)
+    }
+
+    pub fn from_config_source(config: &Config, source: &SourceConfig) -> Result<Self, FetchError> {
         let agent = build_agent(
             config.timeout,
             config.ca_cert_path.as_ref(),
             config.insecure,
             config.proxy.as_deref(),
         )?;
-        let auth = resolve_auth(&config.url, config.auth.as_ref(), config.netrc)?;
+        let auth = resolve_auth(&source.url, config.auth.as_ref(), config.netrc)?;
 
         Ok(Self {
             agent,
-            url: config.url.clone(),
+            url: source.url.clone(),
             method: config.method.clone(),
             body: config.body.clone(),
             headers: config.headers.clone(),

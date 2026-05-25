@@ -49,6 +49,12 @@ streamtail https://example.com/logs \
 streamtail https://example.com/logs \
   --color cyan
 
+streamtail https://example.com/app.log \
+  https://example.com/db.log
+
+streamtail --color green https://example.com/app.log \
+  --color magenta https://example.com/db.log
+
 streamtail https://example.com/logs \
   -f \
   --header "X-Env: prod" \
@@ -88,6 +94,8 @@ streamtail https://internal.example/logs \
 - Start from the end of the initial snapshot when requested
 - Stop automatically on output matches, event counts, or runtime limits
 - Write stream output to a user-selected file, replacing or appending
+- Follow up to six URLs in one process
+- Assign different automatic terminal colors to multiple URLs
 - Color terminal text output when requested without writing color escape codes
   to output files
 - Write optional debug logs to a user-selected file
@@ -118,6 +126,8 @@ streamtail https://internal.example/logs \
   `--append-output`
 - Terminal text color with `--color <COLOR>` and explicit plain output with
   `--no-color`
+- Multiple URL sources, up to six URLs per process
+- Per-URL color overrides where `--color <COLOR>` applies to the next URL
 - Initial snapshot skipping with `--follow-from-end` / `-f`
 - Exit conditions with `--exit-on-match <REGEX>`, `--max-events <N>`, and
   `--max-duration <DURATION>`

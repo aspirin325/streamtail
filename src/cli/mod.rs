@@ -4,10 +4,11 @@ use crate::{color::Color, retry::RetryLimit};
 
 const DEFAULT_INTERVAL: Duration = Duration::from_secs(2);
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_URLS: usize = 6;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
-    pub url: String,
+    pub sources: Vec<SourceConfig>,
     pub method: String,
     pub body: Option<String>,
     pub headers: Vec<HeaderConfig>,
@@ -20,7 +21,6 @@ pub struct Config {
     pub once: bool,
     pub follow_from_end: bool,
     pub json: bool,
-    pub color: Option<Color>,
     pub debug: bool,
     pub log_path: Option<PathBuf>,
     pub output_path: Option<PathBuf>,
@@ -32,6 +32,12 @@ pub struct Config {
     pub exit_on_match: Option<String>,
     pub max_events: Option<u64>,
     pub max_duration: Option<Duration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceConfig {
+    pub url: String,
+    pub color: Option<Color>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,6 +91,7 @@ pub enum CliError {
     MissingRequiredFlag { flag: String, required: String },
     ConflictingAuthFlags,
     ConflictingColorFlags,
+    TooManyUrls { limit: usize },
 }
 
 impl fmt::Display for CliError {
@@ -126,6 +133,7 @@ impl fmt::Display for CliError {
             Self::ConflictingColorFlags => {
                 write!(formatter, "--color and --no-color cannot be used together")
             }
+            Self::TooManyUrls { limit } => write!(formatter, "at most {limit} URLs are supported"),
         }
     }
 }
@@ -137,7 +145,7 @@ where
     I: IntoIterator<Item = String>,
 {
     let mut args = args.into_iter();
-    let mut url = None;
+    let mut sources = Vec::new();
     let mut method = "GET".to_owned();
     let mut method_was_set = false;
     let mut body = None;
@@ -151,7 +159,8 @@ where
     let mut once = false;
     let mut follow_from_end = false;
     let mut json = false;
-    let mut color = None;
+    let mut pending_color = None;
+    let mut color_was_set = false;
     let mut no_color = false;
     let mut debug = false;
     let mut log_path = None;
@@ -186,7 +195,19 @@ where
             "--once" => once = true,
             "-f" | "--follow-from-end" => follow_from_end = true,
             "--json" => json = true,
-            "--color" => color = Some(parse_color(&next_value(&mut args, &arg)?)?),
+            "--color" => {
+                if no_color {
+                    return Err(CliError::ConflictingColorFlags);
+                }
+                if pending_color.is_some() {
+                    return Err(CliError::MissingRequiredFlag {
+                        flag: "--color".to_owned(),
+                        required: "<URL>".to_owned(),
+                    });
+                }
+                pending_color = Some(parse_color(&next_value(&mut args, &arg)?)?);
+                color_was_set = true;
+            }
             "--no-color" => no_color = true,
             "--debug" => debug = true,
             "--log" => log_path = Some(PathBuf::from(next_value(&mut args, &arg)?)),
@@ -220,8 +241,13 @@ where
             }
             "--netrc" => netrc = true,
             _ if arg.starts_with('-') => return Err(CliError::UnknownFlag(arg)),
-            _ if url.is_none() => url = Some(arg),
-            _ => return Err(CliError::UnexpectedArgument(arg)),
+            _ => {
+                validate_url(&arg)?;
+                sources.push(SourceConfig {
+                    url: arg,
+                    color: pending_color.take(),
+                });
+            }
         }
     }
 
@@ -245,17 +271,30 @@ where
     if netrc && auth.is_some() {
         return Err(CliError::ConflictingAuthFlags);
     }
-    if no_color && color.is_some() {
+    if no_color && color_was_set {
         return Err(CliError::ConflictingColorFlags);
+    }
+    if pending_color.is_some() {
+        return Err(CliError::MissingRequiredFlag {
+            flag: "--color".to_owned(),
+            required: "<URL>".to_owned(),
+        });
     }
     if body.is_some() && !method_was_set {
         method = "POST".to_owned();
     }
-    let url = url.ok_or(CliError::MissingUrl)?;
-    validate_url(&url)?;
+    if sources.is_empty() {
+        return Err(CliError::MissingUrl);
+    }
+    if sources.len() > MAX_URLS {
+        return Err(CliError::TooManyUrls { limit: MAX_URLS });
+    }
+    if !no_color {
+        assign_source_colors(&mut sources);
+    }
 
     Ok(CliCommand::Run(Box::new(Config {
-        url,
+        sources,
         method,
         body,
         headers,
@@ -268,7 +307,6 @@ where
         once,
         follow_from_end,
         json,
-        color,
         debug,
         log_path,
         output_path,
@@ -291,7 +329,7 @@ pub fn help_text(binary: &str) -> String {
 Follow changing HTTP content, similar to tail -f for URLs.
 
 USAGE:
-    {binary} [OPTIONS] <URL>
+    {binary} [OPTIONS] <URL> [URL ...]
 
 OPTIONS:
         --method <METHOD>         HTTP method [default: GET, or POST with --body]
@@ -307,8 +345,8 @@ OPTIONS:
         --once                    Fetch once and exit
     -f, --follow-from-end         Start after the first fetched snapshot
         --json                    Emit each update as a JSON line
-        --color <COLOR>           Color text output on stdout
-        --no-color                Disable terminal color formatting
+        --color <COLOR>           Color the next URL's text output on stdout
+        --no-color                Disable terminal color formatting for all URLs
         --output <PATH>           Write stream output to a file instead of stdout
         --append-output           Append to --output instead of replacing it
         --exit-on-match <REGEX>   Exit after emitted output matches a regex
@@ -372,6 +410,38 @@ fn parse_status_code(value: &str) -> Result<u16, CliError> {
 
 fn parse_color(value: &str) -> Result<Color, CliError> {
     Color::parse(value).ok_or_else(|| CliError::InvalidColor(value.to_owned()))
+}
+
+fn assign_source_colors(sources: &mut [SourceConfig]) {
+    if sources.len() < 2 {
+        return;
+    }
+
+    let mut used = sources
+        .iter()
+        .filter_map(|source| source.color)
+        .collect::<Vec<_>>();
+
+    for source in sources.iter_mut().filter(|source| source.color.is_none()) {
+        let color = auto_colors()
+            .iter()
+            .copied()
+            .find(|color| !used.contains(color))
+            .unwrap_or(Color::Cyan);
+        source.color = Some(color);
+        used.push(color);
+    }
+}
+
+fn auto_colors() -> &'static [Color; MAX_URLS] {
+    &[
+        Color::Cyan,
+        Color::Magenta,
+        Color::Green,
+        Color::Yellow,
+        Color::Blue,
+        Color::BrightRed,
+    ]
 }
 
 fn set_auth(auth: &mut Option<AuthConfig>, value: AuthConfig) -> Result<(), CliError> {
@@ -497,7 +567,13 @@ mod tests {
 
         match command {
             CliCommand::Run(config) => {
-                assert_eq!(config.url, "https://example.com/logs");
+                assert_eq!(
+                    config.sources,
+                    vec![SourceConfig {
+                        url: "https://example.com/logs".to_owned(),
+                        color: None,
+                    }]
+                );
                 assert_eq!(config.method, "GET");
                 assert_eq!(config.body, None);
                 assert_eq!(config.headers, Vec::new());
@@ -508,7 +584,6 @@ mod tests {
                 assert_eq!(config.retry_limit, RetryLimit::Unlimited);
                 assert_eq!(config.retry_statuses, Vec::new());
                 assert!(!config.follow_from_end);
-                assert_eq!(config.color, None);
                 assert!(!config.debug);
                 assert_eq!(config.log_path, None);
                 assert_eq!(config.output_path, None);
@@ -608,7 +683,13 @@ mod tests {
                 assert!(config.once);
                 assert!(config.follow_from_end);
                 assert!(config.json);
-                assert_eq!(config.color, Some(Color::BrightCyan));
+                assert_eq!(
+                    config.sources,
+                    vec![SourceConfig {
+                        url: "http://localhost".to_owned(),
+                        color: Some(Color::BrightCyan),
+                    }]
+                );
                 assert!(config.debug);
                 assert_eq!(config.log_path, Some(PathBuf::from("streamtail.log")));
                 assert_eq!(config.output_path, Some(PathBuf::from("streamtail.out")));
@@ -629,6 +710,94 @@ mod tests {
 
         match command {
             CliCommand::Run(config) => assert_eq!(config.method, "POST"),
+            _ => panic!("expected run command"),
+        }
+    }
+
+    #[test]
+    fn parses_multiple_urls_with_auto_colors() {
+        let command = parse(&[
+            "http://localhost/one",
+            "http://localhost/two",
+            "http://localhost/three",
+        ])
+        .expect("valid args");
+
+        match command {
+            CliCommand::Run(config) => {
+                assert_eq!(
+                    config.sources,
+                    vec![
+                        SourceConfig {
+                            url: "http://localhost/one".to_owned(),
+                            color: Some(Color::Cyan),
+                        },
+                        SourceConfig {
+                            url: "http://localhost/two".to_owned(),
+                            color: Some(Color::Magenta),
+                        },
+                        SourceConfig {
+                            url: "http://localhost/three".to_owned(),
+                            color: Some(Color::Green),
+                        },
+                    ]
+                );
+            }
+            _ => panic!("expected run command"),
+        }
+    }
+
+    #[test]
+    fn parses_per_url_color_overrides() {
+        let command = parse(&[
+            "--color",
+            "red",
+            "http://localhost/one",
+            "http://localhost/two",
+        ])
+        .expect("valid args");
+
+        match command {
+            CliCommand::Run(config) => {
+                assert_eq!(
+                    config.sources,
+                    vec![
+                        SourceConfig {
+                            url: "http://localhost/one".to_owned(),
+                            color: Some(Color::Red),
+                        },
+                        SourceConfig {
+                            url: "http://localhost/two".to_owned(),
+                            color: Some(Color::Cyan),
+                        },
+                    ]
+                );
+            }
+            _ => panic!("expected run command"),
+        }
+    }
+
+    #[test]
+    fn parses_no_color_for_all_urls() {
+        let command = parse(&["--no-color", "http://localhost/one", "http://localhost/two"])
+            .expect("valid args");
+
+        match command {
+            CliCommand::Run(config) => {
+                assert_eq!(
+                    config.sources,
+                    vec![
+                        SourceConfig {
+                            url: "http://localhost/one".to_owned(),
+                            color: None,
+                        },
+                        SourceConfig {
+                            url: "http://localhost/two".to_owned(),
+                            color: None,
+                        },
+                    ]
+                );
+            }
             _ => panic!("expected run command"),
         }
     }
@@ -678,6 +847,33 @@ mod tests {
         assert_eq!(
             parse(&["--color", "red", "--no-color", "http://localhost"]),
             Err(CliError::ConflictingColorFlags)
+        );
+    }
+
+    #[test]
+    fn rejects_color_without_url() {
+        assert_eq!(
+            parse(&["--color", "red"]),
+            Err(CliError::MissingRequiredFlag {
+                flag: "--color".to_owned(),
+                required: "<URL>".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_more_than_six_urls() {
+        assert_eq!(
+            parse(&[
+                "http://localhost/1",
+                "http://localhost/2",
+                "http://localhost/3",
+                "http://localhost/4",
+                "http://localhost/5",
+                "http://localhost/6",
+                "http://localhost/7",
+            ]),
+            Err(CliError::TooManyUrls { limit: MAX_URLS })
         );
     }
 
