@@ -1,8 +1,10 @@
 use std::io::{self, Write};
 
+use crate::color::Color;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputMode {
-    Text,
+    Text { color: Option<Color> },
     Json,
 }
 
@@ -25,7 +27,15 @@ where
         }
 
         match self.mode {
-            OutputMode::Text => self.writer.write_all(text.as_bytes())?,
+            OutputMode::Text { color } => {
+                if let Some(color) = color {
+                    write!(self.writer, "\x1b[{}m", color.ansi_code())?;
+                    self.writer.write_all(text.as_bytes())?;
+                    self.writer.write_all(b"\x1b[0m")?;
+                } else {
+                    self.writer.write_all(text.as_bytes())?;
+                }
+            }
             OutputMode::Json => writeln!(self.writer, "{{\"data\":\"{}\"}}", json_escape(text))?,
         }
 
@@ -86,11 +96,26 @@ mod tests {
     #[test]
     fn emits_plain_text() {
         let mut output = Vec::new();
-        let mut renderer = Renderer::new(&mut output, OutputMode::Text);
+        let mut renderer = Renderer::new(&mut output, OutputMode::Text { color: None });
 
         renderer.emit("hello").expect("emit should succeed");
 
         assert_eq!(output, b"hello");
+    }
+
+    #[test]
+    fn emits_colored_text() {
+        let mut output = Vec::new();
+        let mut renderer = Renderer::new(
+            &mut output,
+            OutputMode::Text {
+                color: Some(Color::Green),
+            },
+        );
+
+        renderer.emit("hello").expect("emit should succeed");
+
+        assert_eq!(output, b"\x1b[32mhello\x1b[0m");
     }
 
     #[test]

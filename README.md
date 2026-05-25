@@ -27,6 +27,7 @@ streamtail https://example.com/logs --token "$STREAMTAIL_TOKEN"
 streamtail https://example.com/logs --token-env STREAMTAIL_TOKEN
 streamtail https://example.com/logs --netrc
 streamtail https://example.com/logs --debug --log streamtail.log
+streamtail https://example.com/logs --color cyan
 streamtail https://example.com/logs -f --header "X-Env: prod" --output logs.txt
 streamtail https://example.com/logs --output logs.txt --append-output
 streamtail https://example.com/logs --exit-on-match "deploy complete"
@@ -50,6 +51,8 @@ Useful options:
     --once                    Fetch once and exit
 -f, --follow-from-end         Start after the first fetched snapshot
     --json                    Emit each update as a JSON line
+    --color <COLOR>           Color text output on stdout
+    --no-color                Disable terminal color formatting
     --output <PATH>           Write stream output to a file instead of stdout
     --append-output           Append to --output instead of replacing it
     --exit-on-match <REGEX>   Exit after emitted output matches a regex

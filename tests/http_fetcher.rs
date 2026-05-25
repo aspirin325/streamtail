@@ -264,6 +264,33 @@ fn run_writes_stream_output_to_configured_file() {
 }
 
 #[test]
+fn run_does_not_write_color_codes_to_configured_file() {
+    let (url, handle) = serve_once(200, "hello");
+    let output_path = unique_output_path();
+    let command = cli::parse_args([
+        "--once".to_owned(),
+        "--color".to_owned(),
+        "red".to_owned(),
+        "--output".to_owned(),
+        output_path.display().to_string(),
+        url,
+    ])
+    .expect("valid args");
+
+    let CliCommand::Run(config) = command else {
+        panic!("expected run command");
+    };
+
+    streamtail::run(*config).expect("run should succeed");
+    handle.join().expect("server thread should finish");
+
+    let output = std::fs::read_to_string(&output_path).expect("output should be readable");
+    let _ = std::fs::remove_file(&output_path);
+
+    assert_eq!(output, "hello");
+}
+
+#[test]
 fn run_appends_stream_output_to_configured_file() {
     let (url, handle) = serve_once(200, "hello");
     let output_path = unique_output_path();

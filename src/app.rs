@@ -11,6 +11,7 @@ use regex::Regex;
 
 use crate::{
     cli::Config,
+    color::Color,
     diff::{Change, DiffEngine},
     fetcher::{FetchError, Fetcher, HttpFetcher},
     renderer::{OutputMode, Renderer},
@@ -226,7 +227,17 @@ fn output_mode(config: &Config) -> OutputMode {
     if config.json {
         OutputMode::Json
     } else {
-        OutputMode::Text
+        OutputMode::Text {
+            color: text_output_color(config),
+        }
+    }
+}
+
+fn text_output_color(config: &Config) -> Option<Color> {
+    if config.output_path.is_some() {
+        None
+    } else {
+        config.color
     }
 }
 
@@ -348,6 +359,7 @@ mod tests {
             once: true,
             follow_from_end: false,
             json: false,
+            color: None,
             debug: false,
             log_path: None,
             output_path: None,
@@ -392,6 +404,48 @@ mod tests {
 "#
         );
         assert_eq!(output.last(), Some(&b'\n'));
+    }
+
+    #[test]
+    fn colors_text_output_when_configured() {
+        let fetcher = SequenceFetcher::new(vec![Ok("hello".to_owned())]);
+        let mut config = test_config();
+        config.color = Some(Color::Red);
+        let mut output = Vec::new();
+
+        run_with(fetcher, &mut output, &config).expect("run should succeed");
+
+        assert_eq!(output, b"\x1b[31mhello\x1b[0m");
+    }
+
+    #[test]
+    fn does_not_color_json_output() {
+        let fetcher = SequenceFetcher::new(vec![Ok("hello".to_owned())]);
+        let mut config = test_config();
+        config.json = true;
+        config.color = Some(Color::Red);
+        let mut output = Vec::new();
+
+        run_with(fetcher, &mut output, &config).expect("run should succeed");
+
+        assert_eq!(
+            output,
+            br#"{"data":"hello"}
+"#
+        );
+    }
+
+    #[test]
+    fn does_not_color_file_output_mode() {
+        let fetcher = SequenceFetcher::new(vec![Ok("hello".to_owned())]);
+        let mut config = test_config();
+        config.color = Some(Color::Red);
+        config.output_path = Some("streamtail.log".into());
+        let mut output = Vec::new();
+
+        run_with(fetcher, &mut output, &config).expect("run should succeed");
+
+        assert_eq!(output, b"hello");
     }
 
     #[test]

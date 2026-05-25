@@ -66,6 +66,23 @@ Emit each update as a JSON Lines record with a
 .B data
 field.
 .TP
+.BR \-\-color " " \fICOLOR\fR
+Color text output written to standard output. Supported colors are
+.BR black ,
+.BR red ,
+.BR green ,
+.BR yellow ,
+.BR blue ,
+.BR magenta ,
+.BR cyan ,
+.BR white ,
+and their
+.B bright-
+variants. Color formatting is not written to output files.
+.TP
+.BR \-\-no-color
+Disable terminal color formatting.
+.TP
 .BR \-\-output " " \fIPATH\fR
 Write stream output to a file instead of standard output.
 .TP
@@ -162,6 +179,9 @@ Use matching .netrc credentials:
 .TP
 Write debug logs:
 .B streamtail https://example.com/logs --debug --log streamtail.log
+.TP
+Color terminal output:
+.B streamtail https://example.com/logs --color cyan
 .TP
 Start from the current end and save output:
 .B streamtail https://example.com/logs -f --header "X-Env: prod" --output logs.txt
