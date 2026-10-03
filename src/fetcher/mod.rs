@@ -1,7 +1,6 @@
 use std::{
     env, fmt, fs,
     path::{Path, PathBuf},
-    sync::Arc,
     time::Duration,
 };
 
@@ -56,11 +55,15 @@ pub struct HttpFetcher {
 
 impl HttpFetcher {
     pub fn new(url: impl Into<String>, timeout: Duration) -> Self {
-        let agent = ureq::AgentBuilder::new()
-            .timeout_connect(timeout)
-            .timeout_read(timeout)
-            .timeout_write(timeout)
-            .build();
+        let agent = ureq::Agent::config_builder()
+            .timeout_resolve(Some(timeout))
+            .timeout_connect(Some(timeout))
+            .timeout_send_request(Some(timeout))
+            .timeout_send_body(Some(timeout))
+            .timeout_recv_response(Some(timeout))
+            .timeout_recv_body(Some(timeout))
+            .build()
+            .new_agent();
 
         Self {
             agent,
@@ -134,33 +137,37 @@ impl Fetcher for HttpFetcher {
     fn fetch(&self) -> Result<String, FetchError> {
         let request = self.request()?;
         let response = if let Some(body) = &self.body {
-            request.send_string(body)
+            let request = request
+                .body(body.as_str())
+                .map_err(|err| FetchError::fatal(format!("invalid HTTP request: {err}")))?;
+            self.agent.run(request)
         } else {
-            request.call()
+            let request = request
+                .body(())
+                .map_err(|err| FetchError::fatal(format!("invalid HTTP request: {err}")))?;
+            self.agent.run(request)
         };
 
         match response {
             Ok(response) => read_body(response),
-            Err(ureq::Error::Status(status, _response)) => {
-                status_error(status, &self.retry_statuses)
-            }
-            Err(ureq::Error::Transport(err)) => {
-                Err(FetchError::retryable(format!("transport error: {err}")))
-            }
+            Err(ureq::Error::StatusCode(status)) => status_error(status, &self.retry_statuses),
+            Err(err) => Err(FetchError::retryable(format!("transport error: {err}"))),
         }
     }
 }
 
 impl HttpFetcher {
-    fn request(&self) -> Result<ureq::Request, FetchError> {
-        let mut request = self.agent.request(&self.method, &self.url);
+    fn request(&self) -> Result<ureq::http::request::Builder, FetchError> {
+        let mut request = ureq::http::Request::builder()
+            .method(self.method.as_str())
+            .uri(self.url.as_str());
 
         for header in &self.headers {
-            request = request.set(&header.name, &header.value);
+            request = request.header(&header.name, &header.value);
         }
 
         if let Some(user_agent) = &self.user_agent {
-            request = request.set("User-Agent", user_agent);
+            request = request.header("User-Agent", user_agent);
         }
 
         if let Some(auth) = &self.auth {
@@ -172,14 +179,19 @@ impl HttpFetcher {
     }
 }
 
-fn apply_auth_header(request: ureq::Request, auth: &AuthConfig) -> ureq::Request {
+fn apply_auth_header(
+    request: ureq::http::request::Builder,
+    auth: &AuthConfig,
+) -> ureq::http::request::Builder {
     match auth {
         AuthConfig::Basic { username, password } => {
             let credentials = format!("{username}:{password}");
             let encoded = general_purpose::STANDARD.encode(credentials.as_bytes());
-            request.set("Authorization", &format!("Basic {encoded}"))
+            request.header("Authorization", format!("Basic {encoded}"))
         }
-        AuthConfig::BearerToken(token) => request.set("Authorization", &format!("Bearer {token}")),
+        AuthConfig::BearerToken(token) => {
+            request.header("Authorization", format!("Bearer {token}"))
+        }
         AuthConfig::BearerTokenFile(_) | AuthConfig::BearerTokenEnv(_) => request,
     }
 }
@@ -190,24 +202,25 @@ fn build_agent(
     insecure: bool,
     proxy: Option<&str>,
 ) -> Result<ureq::Agent, FetchError> {
-    let mut builder = ureq::AgentBuilder::new()
-        .timeout_connect(timeout)
-        .timeout_read(timeout)
-        .timeout_write(timeout);
+    let mut builder = ureq::Agent::config_builder()
+        .timeout_resolve(Some(timeout))
+        .timeout_connect(Some(timeout))
+        .timeout_send_request(Some(timeout))
+        .timeout_send_body(Some(timeout))
+        .timeout_recv_response(Some(timeout))
+        .timeout_recv_body(Some(timeout));
 
     if let Some(proxy_url) = proxy {
         let proxy = ureq::Proxy::new(proxy_url)
             .map_err(|err| FetchError::fatal(format!("invalid proxy URL '{proxy_url}': {err}")))?;
-        builder = builder.proxy(proxy);
+        builder = builder.proxy(Some(proxy));
     }
 
     if insecure || ca_cert_path.is_some() {
-        Ok(builder
-            .tls_config(Arc::new(build_tls_config(ca_cert_path, insecure)?))
-            .build())
-    } else {
-        Ok(builder.build())
+        builder = builder.tls_config(build_tls_config(ca_cert_path, insecure)?);
     }
+
+    Ok(builder.build().new_agent())
 }
 
 fn resolve_auth(
@@ -273,49 +286,20 @@ fn clean_token(token: &str, source: &str) -> Result<String, FetchError> {
 fn build_tls_config(
     ca_cert_path: Option<&PathBuf>,
     insecure: bool,
-) -> Result<ureq::rustls::ClientConfig, FetchError> {
-    let provider = ureq::rustls::crypto::ring::default_provider();
-    let builder = ureq::rustls::ClientConfig::builder_with_provider(provider.clone().into())
-        .with_protocol_versions(&[&ureq::rustls::version::TLS12, &ureq::rustls::version::TLS13])
-        .map_err(|err| FetchError::fatal(format!("failed to configure TLS: {err}")))?;
+) -> Result<ureq::tls::TlsConfig, FetchError> {
+    let mut builder = ureq::tls::TlsConfig::builder();
 
     if insecure {
-        let verifier = InsecureVerifier {
-            supported_schemes: provider
-                .signature_verification_algorithms
-                .supported_schemes(),
-        };
-
-        return Ok(builder
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(verifier))
-            .with_no_client_auth());
-    }
-
-    let mut root_store = ureq::rustls::RootCertStore {
-        roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
-    };
-
-    if let Some(path) = ca_cert_path {
+        builder = builder.disable_verification(true);
+    } else if let Some(path) = ca_cert_path {
         let certs = load_ca_certs(path)?;
-        let (valid, _invalid) = root_store.add_parsable_certificates(certs);
-
-        if valid == 0 {
-            return Err(FetchError::fatal(format!(
-                "no valid CA certificates found in {}",
-                path.display()
-            )));
-        }
+        builder = builder.root_certs(ureq::tls::RootCerts::new_with_certs(&certs));
     }
 
-    Ok(builder
-        .with_root_certificates(root_store)
-        .with_no_client_auth())
+    Ok(builder.build())
 }
 
-fn load_ca_certs(
-    path: &Path,
-) -> Result<Vec<ureq::rustls::pki_types::CertificateDer<'static>>, FetchError> {
+fn load_ca_certs(path: &Path) -> Result<Vec<ureq::tls::Certificate<'static>>, FetchError> {
     let bytes = fs::read(path).map_err(|err| {
         FetchError::fatal(format!(
             "failed to read CA certificate {}: {err}",
@@ -329,14 +313,14 @@ fn load_ca_certs(
     {
         parse_pem_certs(&bytes, path)
     } else {
-        Ok(vec![ureq::rustls::pki_types::CertificateDer::from(bytes)])
+        Ok(vec![ureq::tls::Certificate::from_der(&bytes).to_owned()])
     }
 }
 
 fn parse_pem_certs(
     bytes: &[u8],
     path: &Path,
-) -> Result<Vec<ureq::rustls::pki_types::CertificateDer<'static>>, FetchError> {
+) -> Result<Vec<ureq::tls::Certificate<'static>>, FetchError> {
     let text = std::str::from_utf8(bytes).map_err(|err| {
         FetchError::fatal(format!(
             "failed to parse CA certificate {} as PEM: {err}",
@@ -362,7 +346,7 @@ fn parse_pem_certs(
                 path.display()
             ))
         })?;
-        certs.push(ureq::rustls::pki_types::CertificateDer::from(der));
+        certs.push(ureq::tls::Certificate::from_der(&der).to_owned());
         rest = &after_begin[end + "-----END CERTIFICATE-----".len()..];
     }
 
@@ -376,49 +360,10 @@ fn parse_pem_certs(
     }
 }
 
-#[derive(Debug)]
-struct InsecureVerifier {
-    supported_schemes: Vec<ureq::rustls::SignatureScheme>,
-}
-
-impl ureq::rustls::client::danger::ServerCertVerifier for InsecureVerifier {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &ureq::rustls::pki_types::CertificateDer<'_>,
-        _intermediates: &[ureq::rustls::pki_types::CertificateDer<'_>],
-        _server_name: &ureq::rustls::pki_types::ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: ureq::rustls::pki_types::UnixTime,
-    ) -> Result<ureq::rustls::client::danger::ServerCertVerified, ureq::rustls::Error> {
-        Ok(ureq::rustls::client::danger::ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        _message: &[u8],
-        _cert: &ureq::rustls::pki_types::CertificateDer<'_>,
-        _dss: &ureq::rustls::DigitallySignedStruct,
-    ) -> Result<ureq::rustls::client::danger::HandshakeSignatureValid, ureq::rustls::Error> {
-        Ok(ureq::rustls::client::danger::HandshakeSignatureValid::assertion())
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        _message: &[u8],
-        _cert: &ureq::rustls::pki_types::CertificateDer<'_>,
-        _dss: &ureq::rustls::DigitallySignedStruct,
-    ) -> Result<ureq::rustls::client::danger::HandshakeSignatureValid, ureq::rustls::Error> {
-        Ok(ureq::rustls::client::danger::HandshakeSignatureValid::assertion())
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<ureq::rustls::SignatureScheme> {
-        self.supported_schemes.clone()
-    }
-}
-
-fn read_body(response: ureq::Response) -> Result<String, FetchError> {
+fn read_body(mut response: ureq::http::Response<ureq::Body>) -> Result<String, FetchError> {
     response
-        .into_string()
+        .body_mut()
+        .read_to_string()
         .map_err(|err| FetchError::fatal(format!("failed to read response body: {err}")))
 }
 

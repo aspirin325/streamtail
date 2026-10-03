@@ -63,7 +63,7 @@ Useful options:
     --max-duration <DURATION> Exit after the total runtime duration
     --debug                   Write debug logging; requires --log
     --log <PATH>              Debug log output file
-    --ca-cert <PATH>          Add PEM or DER CA certificate roots for TLS
+    --ca-cert <PATH>          Use PEM or DER CA certificate roots for TLS
     --insecure                Disable TLS certificate verification
     --basic-auth <USER:PASS>  Send HTTP Basic authentication
     --token <TOKEN>           Send bearer token authentication

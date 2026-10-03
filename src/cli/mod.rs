@@ -354,7 +354,7 @@ OPTIONS:
         --max-duration <DURATION> Exit after the total runtime duration
         --debug                   Write debug logging; requires --log
         --log <PATH>              Debug log output file
-        --ca-cert <PATH>          Add PEM or DER CA certificate roots for TLS
+        --ca-cert <PATH>          Use PEM or DER CA certificate roots for TLS
         --insecure                Disable TLS certificate verification
         --basic-auth <USER:PASS>  Send HTTP Basic authentication
         --token <TOKEN>           Send bearer token authentication
@@ -582,7 +582,7 @@ mod tests {
                 assert_eq!(config.interval, DEFAULT_INTERVAL);
                 assert_eq!(config.timeout, DEFAULT_TIMEOUT);
                 assert_eq!(config.retry_limit, RetryLimit::Unlimited);
-                assert_eq!(config.retry_statuses, Vec::new());
+                assert!(config.retry_statuses.is_empty());
                 assert!(!config.follow_from_end);
                 assert!(!config.debug);
                 assert_eq!(config.log_path, None);

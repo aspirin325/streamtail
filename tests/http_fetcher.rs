@@ -69,6 +69,17 @@ fn reason_phrase(status: u16) -> &'static str {
     }
 }
 
+fn request_has_header(request: &str, expected_name: &str, expected_value: &str) -> bool {
+    request
+        .split("\r\n")
+        .skip(1)
+        .take_while(|line| !line.is_empty())
+        .filter_map(|line| line.split_once(':'))
+        .any(|(name, value)| {
+            name.eq_ignore_ascii_case(expected_name) && value.trim() == expected_value
+        })
+}
+
 #[test]
 fn fetcher_reads_successful_http_body() {
     let (url, handle) = serve_once(200, "hello");
@@ -127,7 +138,11 @@ fn fetcher_sends_basic_auth_header() {
     let request = requests.recv().expect("request should be captured");
 
     assert_eq!(body, "hello");
-    assert!(request.contains("Authorization: Basic YWxpY2U6c2VjcmV0"));
+    assert!(request_has_header(
+        &request,
+        "Authorization",
+        "Basic YWxpY2U6c2VjcmV0"
+    ));
 }
 
 #[test]
@@ -141,7 +156,11 @@ fn fetcher_sends_bearer_token_header() {
     let request = requests.recv().expect("request should be captured");
 
     assert_eq!(body, "hello");
-    assert!(request.contains("Authorization: Bearer abc123"));
+    assert!(request_has_header(
+        &request,
+        "Authorization",
+        "Bearer abc123"
+    ));
 }
 
 #[test]
@@ -168,7 +187,11 @@ fn fetcher_sends_bearer_token_from_file() {
     let _ = std::fs::remove_file(&token_path);
 
     assert_eq!(body, "hello");
-    assert!(request.contains("Authorization: Bearer file-token"));
+    assert!(request_has_header(
+        &request,
+        "Authorization",
+        "Bearer file-token"
+    ));
 }
 
 #[test]
@@ -195,7 +218,11 @@ fn fetcher_sends_bearer_token_from_env() {
     std::env::remove_var(env_name);
 
     assert_eq!(body, "hello");
-    assert!(request.contains("Authorization: Bearer env-token"));
+    assert!(request_has_header(
+        &request,
+        "Authorization",
+        "Bearer env-token"
+    ));
 }
 
 #[test]
@@ -220,8 +247,12 @@ fn fetcher_sends_method_headers_and_body() {
 
     assert_eq!(body, "hello");
     assert!(request.starts_with("POST /logs HTTP/1.1"));
-    assert!(request.contains("Content-Type: application/json"));
-    assert!(request.contains("X-Test: yes"));
+    assert!(request_has_header(
+        &request,
+        "Content-Type",
+        "application/json"
+    ));
+    assert!(request_has_header(&request, "X-Test", "yes"));
     assert!(request.contains("{\"ok\":true}"));
 }
 
@@ -235,7 +266,11 @@ fn fetcher_sends_user_agent_header() {
     let request = requests.recv().expect("request should be captured");
 
     assert_eq!(body, "hello");
-    assert!(request.contains("User-Agent: streamtail-test"));
+    assert!(request_has_header(
+        &request,
+        "User-Agent",
+        "streamtail-test"
+    ));
 }
 
 #[test]

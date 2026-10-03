@@ -241,7 +241,6 @@ dependencies = [
  "base64",
  "regex",
  "ureq",
- "webpki-roots",
 ]
 
 [[package]]
