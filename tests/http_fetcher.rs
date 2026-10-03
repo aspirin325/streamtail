@@ -31,7 +31,7 @@ fn serve_once_with_request(status: u16, body: &str) -> (String, Receiver<String>
 
     let handle = thread::spawn(move || {
         if let Ok((mut stream, _peer)) = listener.accept() {
-            let _timeout = stream.set_read_timeout(Some(Duration::from_millis(100)));
+            let _timeout = stream.set_read_timeout(Some(Duration::from_secs(2)));
             let mut buffer = [0_u8; 1024];
             let mut request_bytes = Vec::new();
 
@@ -40,7 +40,22 @@ fn serve_once_with_request(status: u16, body: &str) -> (String, Receiver<String>
                     break;
                 }
                 request_bytes.extend_from_slice(&buffer[..read]);
-                if read < buffer.len() {
+
+                let Some(headers_end) = request_bytes
+                    .windows(4)
+                    .position(|part| part == b"\r\n\r\n")
+                else {
+                    continue;
+                };
+                let body_start = headers_end + 4;
+                let headers = String::from_utf8_lossy(&request_bytes[..headers_end]);
+                let content_length = headers
+                    .lines()
+                    .filter_map(|line| line.split_once(':'))
+                    .find(|(name, _)| name.eq_ignore_ascii_case("Content-Length"))
+                    .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                if request_bytes.len() >= body_start + content_length {
                     break;
                 }
             }
